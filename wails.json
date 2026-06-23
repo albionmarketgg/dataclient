@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "albionmarket-dataclient",
+  "outputfilename": "AlbionMarketDataClient",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Albion Market"
+  },
+  "info": {
+    "companyName": "Albion Market",
+    "productName": "Albion Market Data Client",
+    "productVersion": "0.1.2",
+    "copyright": "© 2024–2026 Albion Market",
+    "comments": "Companion data client for albionmarket.gg"
+  }
+}

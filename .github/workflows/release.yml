@@ -1,0 +1,116 @@
+# Builds the Windows installer and publishes a GitHub Release.
+#
+# Distribution model A (chosen): the website's /download/data-client points at
+#   https://github.com/<owner>/<repo>/releases/latest/download/AlbionMarketDataClient-Setup.exe
+# That URL matches by EXACT filename, so every release uploads a stable-named
+# asset (AlbionMarketDataClient-Setup.exe) plus a versioned copy. The version
+# lives in the tag/release title, not the stable filename.
+#
+# Requirements for the download link to work: the repo + its releases must be
+# PUBLIC (the latest-release URL is unauthenticated). If the repo must stay
+# private, host the binary on our own server instead (see CLIENT_AGENT_TODO.md §4).
+#
+# Trigger: push a tag like v1.2.3, or run manually (workflow_dispatch).
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  NPCAP_SDK_URL: https://npcap.com/dist/npcap-sdk-1.13.zip
+  STABLE_ASSET: AlbionMarketDataClient-Setup.exe
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install build tools (mingw gcc + NSIS)
+        shell: pwsh
+        run: |
+          choco install -y --no-progress mingw nsis
+          # NSIS isn't shimmed onto PATH by choco; add it so `wails build -nsis`
+          # finds makensis (otherwise wails silently skips the installer).
+          "C:\Program Files (x86)\NSIS" | Out-File $env:GITHUB_PATH -Append
+          "C:\Program Files\NSIS"       | Out-File $env:GITHUB_PATH -Append
+
+      - name: Verify toolchain
+        shell: pwsh
+        run: |
+          gcc --version
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /VERSION
+
+      - name: Install Npcap SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "$env:NPCAP_SDK_URL" -OutFile npcap-sdk.zip
+          Expand-Archive -Path npcap-sdk.zip -DestinationPath "$env:GITHUB_WORKSPACE\npcap-sdk" -Force
+          "CGO_ENABLED=1"                                          | Out-File $env:GITHUB_ENV -Append
+          "CGO_CFLAGS=-I$env:GITHUB_WORKSPACE\npcap-sdk\Include"   | Out-File $env:GITHUB_ENV -Append
+          "CGO_LDFLAGS=-L$env:GITHUB_WORKSPACE\npcap-sdk\Lib\x64"  | Out-File $env:GITHUB_ENV -Append
+
+      - name: Install Wails CLI
+        shell: pwsh
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+          "$env:USERPROFILE\go\bin" | Out-File $env:GITHUB_PATH -Append
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          wails build -platform windows/amd64 -nsis -ldflags "-X main.version=${{ steps.ver.outputs.version }}"
+
+      - name: Stage release assets (stable + versioned names)
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem build\bin\*installer*.exe | Select-Object -First 1
+          if (-not $installer) { throw "installer not found in build\bin" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $installer.FullName "dist\$env:STABLE_ASSET"
+          Copy-Item $installer.FullName "dist\AlbionMarketDataClient-${{ steps.ver.outputs.version }}-Setup.exe"
+          Get-ChildItem dist
+
+      # NOTE: unsigned installers trigger SmartScreen "unknown publisher" warnings.
+      # To sign, add a code-signing step here before the release (see docs/PACKAGING_AND_SIGNING.md).
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Albion Market Data Client ${{ steps.ver.outputs.tag }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/AlbionMarketDataClient-Setup.exe
+            dist/AlbionMarketDataClient-${{ steps.ver.outputs.version }}-Setup.exe
