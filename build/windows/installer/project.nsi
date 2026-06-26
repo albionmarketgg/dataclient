@@ -49,6 +49,7 @@ VIAddVersionKey "ProductName"     "${INFO_PRODUCTNAME}"
 ManifestDPIAware true
 
 !include "MUI.nsh"
+!include "LogicLib.nsh"
 
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
@@ -60,6 +61,10 @@ ManifestDPIAware true
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
 !insertmacro MUI_PAGE_DIRECTORY # In which folder install page.
 !insertmacro MUI_PAGE_INSTFILES # Installing page.
+
+# Offer to launch the app from the finish page (checkbox, ticked by default).
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXECUTABLE}"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch ${INFO_PRODUCTNAME} now"
 !insertmacro MUI_PAGE_FINISH # Finished installation page.
 
 !insertmacro MUI_UNPAGE_INSTFILES # Uinstalling page
@@ -83,6 +88,27 @@ Section
     !insertmacro wails.setShellContext
 
     !insertmacro wails.webview2runtime
+
+    ; --- Npcap (packet-capture runtime) ---
+    ; Npcap's Free license forbids redistributing its installer, so we download it
+    ; from the official site at install time only when it's missing.
+    ${IfNot} ${FileExists} "$SYSDIR\wpcap.dll"
+        SetDetailsPrint both
+        DetailPrint "Npcap not found - downloading from npcap.com..."
+        SetDetailsPrint listonly
+        InitPluginsDir
+        nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri https://npcap.com/dist/npcap-1.79.exe -OutFile $\"$PLUGINSDIR\npcap-installer.exe$\""'
+        Pop $0
+        ${If} ${FileExists} "$PLUGINSDIR\npcap-installer.exe"
+            SetDetailsPrint both
+            DetailPrint "Launching the Npcap installer (keep WinPcap API-compatible Mode checked)..."
+            SetDetailsPrint listonly
+            ExecWait '"$PLUGINSDIR\npcap-installer.exe"'
+        ${Else}
+            MessageBox MB_OK|MB_ICONEXCLAMATION "Could not download Npcap automatically.$\r$\nPlease install it from https://npcap.com after setup - the client needs it to capture market data."
+        ${EndIf}
+        SetDetailsPrint both
+    ${EndIf}
 
     SetOutPath $INSTDIR
 

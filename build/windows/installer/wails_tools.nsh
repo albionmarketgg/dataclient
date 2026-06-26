@@ -14,7 +14,7 @@
     !define INFO_PRODUCTNAME "Albion Market Data Client"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.1.0"
+    !define INFO_PRODUCTVERSION "0.1.2"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "© 2024–2026 Albion Market"

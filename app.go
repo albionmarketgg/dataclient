@@ -63,6 +63,12 @@ func (a *App) startup(ctx context.Context) {
 	a.eng.OnState(func(s state.Snapshot) { runtime.EventsEmit(ctx, "state", s) })
 	a.eng.OnFeed(func(ev handlers.CaptureEvent) { runtime.EventsEmit(ctx, "feed", ev) })
 	a.eng.OnLog(func(l engine.LogLine) { runtime.EventsEmit(ctx, "log", l) })
+	a.eng.OnCaptureError(func(msg string) {
+		// missing Npcap runtime → prompt the user to install it.
+		if strings.Contains(strings.ToLower(msg), "wpcap") {
+			runtime.EventsEmit(ctx, "npcapMissing", msg)
+		}
+	})
 	a.eng.Log("Albion Market Data Client started.")
 	go a.auth.Restore(ctx)
 	go a.startTray()
@@ -128,6 +134,16 @@ func (a *App) runUpdateCheck() {
 		runtime.EventsEmit(a.ctx, "update", res)
 	}
 }
+
+// OpenNpcapDownload opens the official Npcap download page in the browser.
+func (a *App) OpenNpcapDownload() {
+	if a.ctx != nil {
+		runtime.BrowserOpenURL(a.ctx, "https://npcap.com/#download")
+	}
+}
+
+// RetryCapture re-attempts packet capture (after the user installs Npcap).
+func (a *App) RetryCapture() { a.eng.StartCapture() }
 
 // GetUpdateInfo returns the latest version-check result (empty until the first
 // check completes).

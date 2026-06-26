@@ -75,11 +75,11 @@ type Config struct {
 	Servers []Server `json:"servers"`
 }
 
-// Default returns configuration pointing entirely at a local ingest service.
+// Default returns configuration pointing at the Albion Market services.
 func Default() Config {
 	return Config{
-		IngestBaseURL:         "https://beta.albionmarket.gg",
-		AuthBaseURL:           "https://beta.albionmarket.gg",
+		IngestBaseURL:         "https://albionmarket.gg",
+		AuthBaseURL:           "https://albionmarket.gg",
 		RequirePoW:            true,
 		PacketFilter:          "udp port 5056",
 		StartInTray:           false,

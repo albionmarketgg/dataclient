@@ -56,9 +56,10 @@ type Engine struct {
 
 	packetsSeen atomic.Int64
 
-	onFeed  func(handlers.CaptureEvent)
-	onLog   func(LogLine)
-	onState func(state.Snapshot)
+	onFeed     func(handlers.CaptureEvent)
+	onLog      func(LogLine)
+	onState    func(state.Snapshot)
+	onCaptureErr func(string)
 }
 
 // ItemDB resolves item names + values and stores EMVs seen on the wire.
@@ -158,9 +159,23 @@ func (e *Engine) Store() *store.Store { return e.store }
 func (e *Engine) Market() *handlers.Market { return e.market }
 
 // OnFeed/OnLog/OnState register UI callbacks.
-func (e *Engine) OnFeed(fn func(handlers.CaptureEvent))  { e.onFeed = fn }
-func (e *Engine) OnLog(fn func(LogLine))                 { e.onLog = fn }
-func (e *Engine) OnState(fn func(state.Snapshot))        { e.onState = fn }
+func (e *Engine) OnFeed(fn func(handlers.CaptureEvent)) { e.onFeed = fn }
+func (e *Engine) OnLog(fn func(LogLine))                { e.onLog = fn }
+func (e *Engine) OnState(fn func(state.Snapshot))       { e.onState = fn }
+
+// OnCaptureError registers a callback for capture start failures (e.g. a missing
+// Npcap runtime). The argument is the raw error string.
+func (e *Engine) OnCaptureError(fn func(string)) { e.onCaptureErr = fn }
+
+// startListener starts capture and reports any error to the log + callback.
+func (e *Engine) startListener() {
+	if err := e.listener.Start(); err != nil {
+		e.log("Capture error: " + err.Error())
+		if e.onCaptureErr != nil {
+			e.onCaptureErr(err.Error())
+		}
+	}
+}
 
 // Start begins uploading and capturing.
 func (e *Engine) Start() error {
@@ -169,11 +184,7 @@ func (e *Engine) Start() error {
 	if e.specsSvc != nil {
 		go e.specsSvc.Load()
 	}
-	go func() {
-		if err := e.listener.Start(); err != nil {
-			e.log("Capture error: " + err.Error())
-		}
-	}()
+	go e.startListener()
 	return nil
 }
 
@@ -214,13 +225,7 @@ func (e *Engine) Trades(limit int) []store.Trade {
 }
 
 // StartCapture/StopCapture toggle just the listener.
-func (e *Engine) StartCapture() {
-	go func() {
-		if err := e.listener.Start(); err != nil {
-			e.log("Capture error: " + err.Error())
-		}
-	}()
-}
+func (e *Engine) StartCapture() { go e.startListener() }
 func (e *Engine) StopCapture() { e.listener.Stop() }
 
 // Capturing reports listener status.

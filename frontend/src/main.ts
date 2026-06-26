@@ -604,6 +604,29 @@ function escapeHtml(s: string) {
 }
 
 // ---- wire events + initial load ----
+let npcapShown = false; // only surface the Npcap modal once per run
+
+function renderNpcapModal() {
+  let host = document.getElementById("npcapModal");
+  if (!npcapShown) { host?.remove(); return; }
+  if (!host) { host = document.createElement("div"); host.id = "npcapModal"; document.body.appendChild(host); }
+  host.className = "modal-overlay";
+  host.innerHTML = `
+    <div class="modal">
+      <h3>Npcap required</h3>
+      <p>Packet capture couldn't start because <b>Npcap</b> isn't installed. The client needs it to read Albion's network traffic.</p>
+      <p class="dim">Install Npcap (keep the default "WinPcap API-compatible Mode" checked), then click Retry.</p>
+      <div class="row" style="gap:8px;margin-top:16px;justify-content:flex-end">
+        <button class="btn ghost sm" id="npcapRetry" style="width:auto;padding:0 14px">Retry</button>
+        <button class="btn sm" id="npcapGet" style="width:auto;padding:0 14px">Download Npcap</button>
+      </div>
+    </div>`;
+  host.querySelector("#npcapGet")!.addEventListener("click", () => { App()?.OpenNpcapDownload(); });
+  host.querySelector("#npcapRetry")!.addEventListener("click", () => {
+    npcapShown = false; renderNpcapModal(); App()?.RetryCapture();
+  });
+}
+
 // showUpdate decides whether the version-check result warrants the modal.
 function showUpdate(r: any) {
   if (!r) return;
@@ -656,6 +679,7 @@ async function init() {
     r.EventsOn("authPending", (p: any) => { authPending = { userCode: p.userCode, url: p.url }; if (authWaiting) renderAuthCard(); });
     r.EventsOn("authError", (msg: string) => { authWaiting = false; authPending = null; authError = msg || "Login failed"; renderAuthCard(); });
     r.EventsOn("update", (u: any) => showUpdate(u));
+    r.EventsOn("npcapMissing", () => { npcapShown = true; renderNpcapModal(); });
   }
   // 1s tick: refresh session state, drive the session-suggestion toasts, and
   // keep the tracker tab's timer/log live.
