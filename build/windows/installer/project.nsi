@@ -87,6 +87,12 @@ FunctionEnd
 Section
     !insertmacro wails.setShellContext
 
+    ; Close any running instance so its .exe can be overwritten (upgrade in place).
+    ; Wails doesn't do this, so a running client blocks the install with a
+    ; "file in use" error. Kill by exe name; the mutex frees on process exit.
+    nsExec::Exec 'taskkill /F /IM "${PRODUCT_EXECUTABLE}"'
+    Sleep 800
+
     !insertmacro wails.webview2runtime
 
     ; --- Npcap (packet-capture runtime) ---
