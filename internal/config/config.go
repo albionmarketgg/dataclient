@@ -52,6 +52,9 @@ type Config struct {
 	// UploadSpecs syncs the character's Destiny Board (mastery/specialization
 	// levels). Login-gated.
 	UploadSpecs bool `json:"uploadSpecs"`
+	// UploadAwakened syncs awakened weapons to the albionmarket.gg dashboard.
+	// Login-gated.
+	UploadAwakened bool `json:"uploadAwakened"`
 
 	// ItemsURL is the source for item id->name data. Empty means "<IngestBaseURL>/items.txt".
 	ItemsURL string `json:"itemsUrl"`
@@ -91,6 +94,7 @@ func Default() Config {
 		UploadLoot:            true,
 		UploadParty:           true,
 		UploadSpecs:           true,
+		UploadAwakened:        true,
 		MarketOrdersTopic:     "marketorders.ingest",
 		MarketHistoriesTopic:  "markethistories.ingest",
 		GoldPricesTopic:       "goldprices.ingest",

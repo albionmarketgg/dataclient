@@ -28,7 +28,7 @@ type Config = {
   startInTray: boolean; closeToTray: boolean;
   uploadTrades: boolean; uploadMails: boolean; uploadGathering: boolean;
   uploadCombat: boolean; uploadLoot: boolean; uploadParty: boolean;
-  uploadSpecs: boolean;
+  uploadSpecs: boolean; uploadAwakened: boolean;
   itemsUrl: string; captureDevice: string;
   marketOrdersTopic: string; marketHistoriesTopic: string; goldPricesTopic: string;
   networkStartDelaySecs: number; idleMinutes: number; idleCheckMinutes: number;
@@ -39,8 +39,8 @@ let snapshot: Snapshot = {
   playerName: "", inGame: false, hasEncryptedData: false, listening: false,
 };
 let stats: Stats = { queued: 0, marketOrders: 0, marketHistory: 0, goldPrices: 0, emv: 0, failed: 0 };
-type UserStats = { trades: number; mails: number; gathering: number; dungeon: number; loot: number; party: number; specs: number };
-let userStats: UserStats = { trades: 0, mails: 0, gathering: 0, dungeon: 0, loot: 0, party: 0, specs: 0 };
+type UserStats = { trades: number; mails: number; gathering: number; dungeon: number; loot: number; party: number; specs: number; awakened: number };
+let userStats: UserStats = { trades: 0, mails: 0, gathering: 0, dungeon: 0, loot: 0, party: 0, specs: 0, awakened: 0 };
 let feed: Feed[] = [];
 let logs: Log[] = [];
 let config: Config | null = null;
@@ -61,6 +61,38 @@ const FEED_KIND_TO_SESSION: Record<string, string> = { gather: "gathering", dung
 let route = "dashboard";
 let updateInfo: any = null;     // latest version-check result being shown
 let updateDismissed = "";       // soft update the user clicked "Later" on
+
+// iconUrl resolves an awakened item's icon via our icon endpoint (delegates to the
+// cached render service server-side). 50px is a natively-supported size.
+function iconUrl(itemId: string, quality?: number): string {
+  const q = quality ? `&quality=${quality}` : "";
+  return `https://albionmarket.gg/api/icon/${encodeURIComponent(itemId || "")}?size=50${q}`;
+}
+
+// per-route sidebar icons — inline SVG (bundled, no external deps)
+const ICON_PATHS: Record<string, string> = {
+  dashboard: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
+  feed: '<circle cx="5" cy="19" r="1.4"/><path d="M5 12a7 7 0 0 1 7 7M5 5a14 14 0 0 1 14 14"/>',
+  trades: '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
+  mails: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M4 7l8 6 8-6"/>',
+  dungeon: '<path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/>',
+  gathering: '<path d="M4 20c8 0 15-6 15-15C11 5 4 12 4 20z"/><path d="M9 15c2-3 4-5 7-7"/>',
+  loot: '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  awakened: '<path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4z"/>',
+  verify: '<circle cx="12" cy="12" r="9"/><path d="M8.4 12l2.5 2.5 4.7-5.2"/>',
+  logs: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+};
+function navIcon(id: string): string {
+  const p = ICON_PATHS[id];
+  return p ? `<svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>` : "";
+}
+
+// serverName resolves a region id to its display name.
+const SERVER_NAMES: Record<number, string> = { 1: "Americas", 2: "Asia", 3: "Europe" };
+function serverName(id: number): string { return SERVER_NAMES[id] || (id ? "Server " + id : "—"); }
+
+const dec2 = (n: number) => (Math.round((n || 0) * 100) / 100).toString();
 
 // ---- helpers ----
 const el = (html: string): HTMLElement => {
@@ -120,12 +152,13 @@ function buildShell(): HTMLElement {
     ["dungeon", "Dungeon"],
     ["gathering", "Gathering"],
     ["loot", "Loot"],
+    ["awakened", "Awakened Inventory"],
     ["verify", "Verification"],
     ["logs", "Logs"],
     ["settings", "Settings"],
   ];
   for (const [id, label] of items) {
-    const b = el(`<button data-route="${id}">${label}</button>`);
+    const b = el(`<button data-route="${id}">${navIcon(id)}${label}</button>`);
     b.addEventListener("click", () => { route = id; render(); });
     nav.appendChild(b);
   }
@@ -218,7 +251,7 @@ function renderContent() {
   const content = document.getElementById("content")!;
   const actions = document.getElementById("topactions")!;
   actions.innerHTML = "";
-  title.textContent = ({ dashboard: "Dashboard", feed: "Live Feed", trades: "Trades", mails: "Mails", dungeon: "Dungeon", gathering: "Gathering", loot: "Loot", verify: "Verification", logs: "Logs", settings: "Settings" } as any)[route];
+  title.textContent = ({ dashboard: "Dashboard", feed: "Live Feed", trades: "Trades", mails: "Mails", dungeon: "Dungeon", gathering: "Gathering", loot: "Loot", awakened: "Awakened Inventory", verify: "Verification", logs: "Logs", settings: "Settings" } as any)[route];
 
   if (route === "dashboard") return renderDashboard(content, actions);
   if (route === "feed") return renderFeed(content, actions);
@@ -227,6 +260,7 @@ function renderContent() {
   if (route === "dungeon") return renderDungeon(content, actions);
   if (route === "gathering") return renderGathering(content, actions);
   if (route === "loot") return renderLoot(content, actions);
+  if (route === "awakened") return renderAwakened(content, actions);
   if (route === "verify") return renderVerify(content, actions);
   if (route === "logs") return renderLogs(content, actions);
   if (route === "settings") return renderSettings(content, actions);
@@ -245,7 +279,7 @@ async function renderVerify(content: HTMLElement, _actions: HTMLElement) {
         `<tr><td class="mono">${escapeHtml(c.name)}</td><td class="dim">${c.serverName || "—"}</td><td class="mono">${silver(c.fame)} fame</td>
          <td style="text-align:right"><button class="btn sm vbtn" data-name="${escapeHtml(c.name)}" data-srv="${c.serverId}" data-fame="${c.fame}" style="width:auto;padding:0 12px">Verify</button></td></tr>`
       ).join("")
-    : `<tr><td colspan="4" class="dim">No character detected yet — log into Albion (or travel between zones) and your character appears here.</td></tr>`;
+    : `<tr><td colspan="4" class="dim">No character detected yet — log into Albion Online (or travel between zones) and your character appears here.</td></tr>`;
 
   content.innerHTML = `
     <div class="panel" style="max-width:680px">
@@ -283,7 +317,7 @@ const dur = (s: number) => {
 // Capture + sync tool by design: analytics (totals, value, DPS, silver/hr, trends)
 // live on the website, fed by sync. These tabs show only a stopwatch + capture log.
 
-const websiteNote = `<div class="dim" style="margin-top:12px;font-size:12px">Detailed stats, totals and value are shown on the <b>Albion Market</b> website — this client captures the data and syncs it to your account.</div>`;
+const websiteNote = `<div class="dim" style="margin-top:12px;font-size:12px">Detailed stats, totals and values are shown on the <b>Albion Market</b> website — this client captures the data and syncs it to your account.</div>`;
 
 // renderKindLog shows the raw capture log filtered to the given feed kind(s).
 function renderKindLog(host: HTMLElement, kinds: string[], emptyMsg: string) {
@@ -339,6 +373,48 @@ function renderDungeon(content: HTMLElement, actions: HTMLElement) {
 
 function renderLoot(content: HTMLElement, actions: HTMLElement) {
   renderSessionTab(content, actions, "loot", "Loot", "loot", "No loot captured yet. Items picked up by you and nearby players appear here.");
+}
+
+const QUALITY_NAMES: Record<number, string> = { 1: "Normal", 2: "Good", 3: "Outstanding", 4: "Excellent", 5: "Masterpiece" };
+function truncate(s: string, n: number): string { return s.length <= n ? s : s.slice(0, n - 1) + "…"; }
+
+async function renderAwakened(content: HTMLElement, _actions: HTMLElement) {
+  const snap = (await App()?.GetAwakenedItems()) || { items: [] };
+  const items: any[] = snap.items || [];
+  const synced = config?.uploadAwakened !== false;
+
+  const trait = (t: any[], n: number) => (t && t[n]) ? `${escapeHtml(t[n].name)} <span class="dim">+${Number(t[n].value || 0).toFixed(2)}${t[n].percent ? "%" : ""}</span>` : "<span class='dim'>—</span>";
+  const rows = items.map((it) => {
+    const qn = QUALITY_NAMES[it.quality] || "";
+    return `<tr>
+      <td class="aw-name"><img class="aw-ico-inline" src="${iconUrl(it.itemId, it.quality)}" alt="" onerror="this.style.visibility='hidden'">${escapeHtml(it.name || it.itemId || "")}</td>
+      <td>${escapeHtml(serverName(it.serverId))}</td>
+      <td title="${escapeHtml(qn)}">${escapeHtml(truncate(qn, 7))}</td>
+      <td>${escapeHtml(it.attunedTo || snapshot.playerName || "—")}</td>
+      <td>${dec2(it.attunement)}</td>
+      <td>${dec2(it.strain)}x</td>
+      <td>${trait(it.traits, 0)}</td>
+      <td>${trait(it.traits, 1)}</td>
+      <td>${trait(it.traits, 2)}</td>
+      <td>${escapeHtml(it.location || "—")}</td>
+    </tr>`;
+  }).join("");
+
+  content.innerHTML = `
+    <div class="panel">
+      <div class="aw-log-head dim">
+        Awakened weapons detected in your inventory. ${synced
+          ? "Synced to your <b>albionmarket.gg</b> dashboard, where you can list them for sale."
+          : `Syncing is <b>off</b> — enable it in Settings to send these to your dashboard.`}
+      </div>
+      ${items.length ? `<div class="table-wrap"><table class="aw-table">
+        <thead><tr>
+          <th>Name</th><th>Server</th><th>Quality</th><th>Attuned to</th>
+          <th>Attunement</th><th>Strain</th><th>Trait 1</th><th>Trait 2</th><th>Trait 3</th><th>Location</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>` : `<div class="empty">No awakened weapons detected yet. They'll appear here once seen in your inventory.</div>`}
+    </div>${websiteNote}`;
 }
 
 type Mail = { itemId: string; auctionType: number; partialAmount: number; totalAmount: number; unitSilver: number; totalSilver: number; received: string; playerName: string; locationId: number; isSet: boolean };
@@ -408,6 +484,7 @@ function renderDashboard(content: HTMLElement, actions: HTMLElement) {
       ${cardsDiv("Loot", fmt(userStats.loot))}
       ${cardsDiv("Party", fmt(userStats.party))}
       ${cardsDiv("Specs", fmt(userStats.specs))}
+      ${cardsDiv("Awakened", fmt(userStats.awakened))}
     </div>
     <div class="panel">
       <h3>Recent Captures</h3>
@@ -469,6 +546,7 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
     ["uploadLoot", "Loot", "Items looted by you and nearby players.", c.uploadLoot],
     ["uploadParty", "Party", "Your current party members.", c.uploadParty],
     ["uploadSpecs", "Character specs", "Your crafting/gathering/combat mastery & specialization levels (sent on login).", c.uploadSpecs],
+    ["uploadAwakened", "Awakened weapons", "Sync your awakened weapons to your albionmarket.gg dashboard.", c.uploadAwakened],
   ];
   const dataToggles = dataTypes.map(([id, name, desc, on]) => `
     <label class="datatoggle" for="${id}">
@@ -545,6 +623,7 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
       uploadLoot: chk("uploadLoot"),
       uploadParty: chk("uploadParty"),
       uploadSpecs: chk("uploadSpecs"),
+      uploadAwakened: chk("uploadAwakened"),
     };
     const err = await App()?.SaveConfig(next);
     const msg = content.querySelector("#saveMsg")!;
@@ -597,6 +676,8 @@ async function tick() {
   }
   if (changed) renderToasts();
   if (["dungeon", "gathering", "loot", "verify"].includes(route)) renderContent();
+  // awakened updates live too, but don't clobber a price field while it's focused
+  if (route === "awakened" && (document.activeElement as HTMLElement)?.tagName !== "INPUT") renderContent();
 }
 
 function escapeHtml(s: string) {
@@ -614,7 +695,7 @@ function renderNpcapModal() {
   host.innerHTML = `
     <div class="modal">
       <h3>Npcap required</h3>
-      <p>Packet capture couldn't start because <b>Npcap</b> isn't installed. The client needs it to read Albion's network traffic.</p>
+      <p>Packet capture couldn't start because <b>Npcap</b> isn't installed. The client needs it to read Albion Online's network traffic.</p>
       <p class="dim">Install Npcap (keep the default "WinPcap API-compatible Mode" checked), then click Retry.</p>
       <div class="row" style="gap:8px;margin-top:16px;justify-content:flex-end">
         <button class="btn ghost sm" id="npcapRetry" style="width:auto;padding:0 14px">Retry</button>

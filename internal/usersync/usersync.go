@@ -26,6 +26,7 @@ type Snapshots struct {
 	Gathering  func() any
 	Loot       func() any
 	Party      func() any
+	Awakened   func() any
 	ServerID   func() int
 	PlayerName func() string // in-game character that produced the data
 }
@@ -39,6 +40,7 @@ type Stats struct {
 	Loot      int64 `json:"loot"`
 	Party     int64 `json:"party"`
 	Specs     int64 `json:"specs"`
+	Awakened  int64 `json:"awakened"`
 }
 
 // SpecEntry is one Destiny Board node + mastery level, for the specs upload.
@@ -62,6 +64,9 @@ type Syncer struct {
 
 	sessions *SessionManager // tags uploads with the active sessionId (may be nil)
 
+	awMu    sync.Mutex
+	awTimer *time.Timer // debounce for event-driven awakened sync
+
 	mu       sync.Mutex
 	lastSig  map[string]string
 	counters map[string]*atomic.Int64
@@ -77,7 +82,7 @@ func New(baseURL string, st *store.Store, token func() (string, string, bool), e
 		logf = func(string) {}
 	}
 	counters := map[string]*atomic.Int64{}
-	for _, k := range []string{"trades", "mails", "gathering", "dungeon", "loot", "party", "specs"} {
+	for _, k := range []string{"trades", "mails", "gathering", "dungeon", "loot", "party", "specs", "awakened"} {
 		counters[k] = &atomic.Int64{}
 	}
 	return &Syncer{
@@ -103,6 +108,7 @@ func (s *Syncer) Stats() Stats {
 		Loot:      s.counters["loot"].Load(),
 		Party:     s.counters["party"].Load(),
 		Specs:     s.counters["specs"].Load(),
+		Awakened:  s.counters["awakened"].Load(),
 	}
 }
 
@@ -141,6 +147,11 @@ func (s *Syncer) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.awMu.Lock()
+	if s.awTimer != nil {
+		s.awTimer.Stop()
+	}
+	s.awMu.Unlock()
 	s.wg.Wait()
 }
 
@@ -165,6 +176,64 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 	}
 	if s.on("gathering") {
 		s.syncSnapshot(ctx, jwt, "gathering", s.snaps.Gathering)
+	}
+	// awakened is event-driven (see TriggerAwakened), not on this loop.
+}
+
+// TriggerAwakened schedules an awakened sync ~2s after the latest inventory
+// change (debounced), so a burst of item packets results in a single push. The
+// push itself is still change-deduped, so identical data won't re-POST.
+func (s *Syncer) TriggerAwakened() {
+	s.awMu.Lock()
+	defer s.awMu.Unlock()
+	if s.awTimer != nil {
+		s.awTimer.Stop()
+	}
+	s.awTimer = time.AfterFunc(2*time.Second, func() {
+		jwt, _, ok := s.token()
+		if !ok || !s.on("awakened") {
+			return
+		}
+		s.syncAwakened(context.Background(), jwt)
+	})
+}
+
+// syncAwakened pushes the awakened inventory to /user/awakened/sync (login-gated,
+// only when the set changed since the last push). serverId is merged top-level.
+func (s *Syncer) syncAwakened(ctx context.Context, jwt string) {
+	if s.snaps.Awakened == nil {
+		return
+	}
+	body, err := json.Marshal(s.snaps.Awakened())
+	if err != nil {
+		return
+	}
+	sid := 0
+	if s.snaps.ServerID != nil {
+		sid = s.snaps.ServerID()
+	}
+	if sid < 1 || sid > 3 {
+		return // server not detected yet — a serverId of 0 would 400
+	}
+	var m map[string]any
+	if json.Unmarshal(body, &m) == nil && m != nil {
+		m["serverId"] = sid
+		if merged, e := json.Marshal(m); e == nil {
+			body = merged
+		}
+	}
+	sig := hashBytes(body)
+	s.mu.Lock()
+	same := s.lastSig["awakened"] == sig
+	s.mu.Unlock()
+	if same {
+		return
+	}
+	if s.postRaw(ctx, jwt, "/user/awakened/sync", body) {
+		s.mu.Lock()
+		s.lastSig["awakened"] = sig
+		s.mu.Unlock()
+		s.counters["awakened"].Add(1)
 	}
 }
 
@@ -388,6 +457,9 @@ func (s *Syncer) postRaw(ctx context.Context, jwt, path string, body []byte) boo
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("User-Agent", "AlbionMarketDataClient")
+	if _, userID, ok := s.token(); ok && userID != "" {
+		req.Header.Set("X-User-Id", userID)
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return false

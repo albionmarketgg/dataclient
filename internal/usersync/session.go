@@ -320,6 +320,9 @@ func (m *SessionManager) postJSON(jwt, path string, body any, out any) bool {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("User-Agent", "AlbionMarketDataClient")
+	if _, userID, ok := m.token(); ok && userID != "" {
+		req.Header.Set("X-User-Id", userID)
+	}
 	resp, err := m.client.Do(req)
 	if err != nil {
 		m.logf("Session " + path + " failed: " + err.Error())

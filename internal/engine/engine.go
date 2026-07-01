@@ -12,6 +12,7 @@ import (
 	"github.com/niick1231/albionmarket_dataclient/internal/config"
 	"github.com/niick1231/albionmarket_dataclient/internal/dispatch"
 	"github.com/niick1231/albionmarket_dataclient/internal/handlers"
+	"github.com/niick1231/albionmarket_dataclient/internal/locations"
 	"github.com/niick1231/albionmarket_dataclient/internal/market"
 	"github.com/niick1231/albionmarket_dataclient/internal/photon"
 	"github.com/niick1231/albionmarket_dataclient/internal/specs"
@@ -44,6 +45,7 @@ type Engine struct {
 	Gathering *trackers.Gathering
 	Combat    *trackers.Combat
 	Loot      *trackers.Loot
+	Awakened  *trackers.Awakened
 	Specs     *handlers.Specs
 
 	specsSvc *specs.Service
@@ -103,10 +105,20 @@ func New(cfg config.Config, itemDB ItemDB, dbPath string) *Engine {
 	e.Gathering = trackers.NewGathering(info, e.State)
 	e.Combat = trackers.NewCombat(e.Party)
 	e.Loot = trackers.NewLoot(info)
+	e.Awakened = trackers.NewAwakened(info,
+		func() int { return e.State.Snapshot().ServerID },
+		func() string { return e.State.Snapshot().PlayerName },
+		func() string {
+			if name, ok := locations.Resolve(e.State.Snapshot().LocationID); ok {
+				return name
+			}
+			return ""
+		})
 	e.Party.Register(e.disp)
 	e.Gathering.Register(e.disp)
 	e.Combat.Register(e.disp)
 	e.Loot.Register(e.disp)
+	e.Awakened.Register(e.disp)
 
 	// Destiny Board reader: resolves the FullAchievementInfo packet to {id, level}
 	// via the achievements.xml dump.

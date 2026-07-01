@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -217,6 +221,94 @@ func (a *App) ToggleCapture(on bool) {
 	} else {
 		a.eng.StopCapture()
 	}
+}
+
+// GetAwakenedItems returns the current awakened-inventory snapshot.
+func (a *App) GetAwakenedItems() trackers.AwakenedSnapshot { return a.eng.Awakened.Snapshot() }
+
+// AwakenedSellItem is one item to list, with its own price (0 == offers only).
+type AwakenedSellItem struct {
+	Key   string `json:"key"`
+	Price int64  `json:"price"`
+}
+
+// AwakenedSellRequest lists one or more awakened items, each at its own price.
+type AwakenedSellRequest struct {
+	Items []AwakenedSellItem `json:"items"`
+}
+
+// RemoveAwakened hides an item from the Awakened Inventory table.
+func (a *App) RemoveAwakened(key string) { a.eng.Awakened.Remove(key) }
+
+// SellOnAlbionMarket lists the given awakened items for sale on albionmarket.gg,
+// each at its own price (0 == offers only). Works for a single item or a bulk
+// list. Login-gated. Returns "" on success, else an error message.
+//
+// TODO: confirm the endpoint + payload with the web agent (see the sell API outline).
+func (a *App) SellOnAlbionMarket(req AwakenedSellRequest) string {
+	if len(req.Items) == 0 {
+		return "no items selected"
+	}
+	jwt, _, ok := a.tokenProvider()
+	if !ok {
+		return "please sign in first"
+	}
+	byKey := map[string]trackers.AwakenedItem{}
+	for _, it := range a.eng.Awakened.Snapshot().Items {
+		byKey[it.Key] = it
+	}
+	// Per-item payload: itemId + serverId + quality + strain + traits + price.
+	// Seller identity comes from the JWT + serverId (backend checks the user has a
+	// verified character there); attuned-to name and display strings are dropped.
+	items := make([]map[string]any, 0, len(req.Items))
+	for _, sel := range req.Items {
+		it, found := byKey[sel.Key]
+		if !found {
+			continue
+		}
+		traits := make([]map[string]any, 0, len(it.Traits))
+		for _, tr := range it.Traits {
+			traits = append(traits, map[string]any{"id": tr.ID, "value": tr.Value})
+		}
+		items = append(items, map[string]any{
+			"itemId":   it.ItemID,
+			"serverId": it.ServerID,
+			"quality":  it.Quality,
+			"strain":   it.Strain,
+			"traits":   traits,
+			"price":    sel.Price,
+		})
+	}
+	body := map[string]any{"items": items}
+	if err := a.postJSON(jwt, "/user/awakened/list", body); err != nil {
+		return err.Error()
+	}
+	a.eng.Log(fmt.Sprintf("Listed %d awakened item(s) for sale.", len(items)))
+	return ""
+}
+
+// postJSON is a small authenticated JSON POST helper for bound methods.
+func (a *App) postJSON(jwt, path string, body any) error {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(a.cfg.IngestBaseURL, "/")+path, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("User-Agent", "AlbionMarketDataClient")
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // GetConfig returns the current configuration.

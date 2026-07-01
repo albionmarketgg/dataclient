@@ -99,6 +99,9 @@ func (a *App) initUserSync() {
 			// character specs: login + consent only (no session, no verification)
 			case "specs":
 				return a.cfg.UploadSpecs
+			// awakened weapons: login + consent only
+			case "awakened":
+				return a.cfg.UploadAwakened
 			}
 			return false
 		},
@@ -116,6 +119,7 @@ func (a *App) initUserSync() {
 				}
 				return map[string]any{"roster": roster}
 			},
+			Awakened:   func() any { return a.eng.Awakened.SyncBody() },
 			ServerID:   func() int { return a.eng.State.Snapshot().ServerID },
 			PlayerName: func() string { return a.eng.State.Snapshot().PlayerName },
 		},
@@ -137,6 +141,8 @@ func (a *App) initUserSync() {
 	})
 	// character specs: the game pushes the full Destiny Board on entering the
 	// world; upload it (resolved to ids) for the current in-game character.
+	// awakened inventory: event-driven — a change schedules a debounced (~2s) sync.
+	a.eng.Awakened.OnChange(func() { a.usersync.TriggerAwakened() })
 	a.eng.Specs.OnFull(func(version string, entries []handlers.SpecEntry) {
 		snap := a.eng.State.Snapshot()
 		out := make([]usersync.SpecEntry, len(entries))
