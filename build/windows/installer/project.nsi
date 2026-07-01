@@ -132,6 +132,11 @@ SectionEnd
 Section "uninstall"
     !insertmacro wails.setShellContext
 
+    ; stop the running client + drop the "start at login" entry
+    nsExec::Exec 'taskkill /F /IM "${PRODUCT_EXECUTABLE}"'
+    Sleep 500
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "AlbionMarketDataClient"
+
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
     RMDir /r $INSTDIR

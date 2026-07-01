@@ -25,7 +25,7 @@ type Feed = { time: string; kind: string; detail: string; count: number };
 type Log = { time: string; text: string };
 type Config = {
   ingestBaseUrl: string; authBaseUrl: string; requirePow: boolean; packetFilter: string;
-  startInTray: boolean; closeToTray: boolean;
+  startInTray: boolean; closeToTray: boolean; startWithWindows: boolean;
   uploadTrades: boolean; uploadMails: boolean; uploadGathering: boolean;
   uploadCombat: boolean; uploadLoot: boolean; uploadParty: boolean;
   uploadSpecs: boolean; uploadAwakened: boolean;
@@ -585,6 +585,10 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
         <h3>Window &amp; tray</h3>
         <div class="panel-body">
           <div class="field switch">
+            <input type="checkbox" id="startWithWindows" ${c.startWithWindows ? "checked" : ""}/>
+            <label for="startWithWindows">Start automatically when Windows starts</label>
+          </div>
+          <div class="field switch">
             <input type="checkbox" id="startInTray" ${c.startInTray ? "checked" : ""}/>
             <label for="startInTray">Start minimized in the system tray</label>
           </div>
@@ -615,6 +619,7 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
       ...c,
       startInTray: chk("startInTray"),
       closeToTray: chk("closeToTray"),
+      startWithWindows: chk("startWithWindows"),
       captureDevice: (content.querySelector("#captureDevice") as HTMLSelectElement).value,
       uploadTrades: chk("uploadTrades"),
       uploadMails: chk("uploadMails"),

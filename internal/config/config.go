@@ -41,6 +41,8 @@ type Config struct {
 	StartInTray bool `json:"startInTray"`
 	// CloseToTray hides to tray on window close instead of quitting.
 	CloseToTray bool `json:"closeToTray"`
+	// StartWithWindows launches the client at Windows login (HKCU Run key).
+	StartWithWindows bool `json:"startWithWindows"`
 	// Per-type opt-in for syncing the user's own captured data to their account.
 	// Each uploads only when logged in. Default ON.
 	UploadTrades    bool `json:"uploadTrades"`
@@ -87,6 +89,7 @@ func Default() Config {
 		PacketFilter:          "udp port 5056",
 		StartInTray:           false,
 		CloseToTray:           true,
+		StartWithWindows:      true,
 		UploadTrades:          true,
 		UploadMails:           true,
 		UploadGathering:       true,

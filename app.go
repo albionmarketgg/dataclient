@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/niick1231/albionmarket_dataclient/internal/auth"
+	"github.com/niick1231/albionmarket_dataclient/internal/autostart"
 	"github.com/niick1231/albionmarket_dataclient/internal/config"
 	"github.com/niick1231/albionmarket_dataclient/internal/engine"
 	"github.com/niick1231/albionmarket_dataclient/internal/handlers"
@@ -74,6 +76,7 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 	a.eng.Log("Albion Market Data Client started.")
+	a.applyAutostart()
 	go a.auth.Restore(ctx)
 	go a.startTray()
 	if a.cfg.StartInTray {
@@ -320,8 +323,19 @@ func (a *App) SaveConfig(cfg config.Config) string {
 	if err := cfg.Save(a.cfgPath); err != nil {
 		return err.Error()
 	}
+	a.applyAutostart()
 	a.eng.Log("Configuration saved. Restart to apply capture changes.")
 	return ""
+}
+
+// applyAutostart syncs the Windows "start at login" registry entry to the
+// current StartWithWindows setting (points at this executable).
+func (a *App) applyAutostart() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	_ = autostart.Set(a.cfg.StartWithWindows, exe)
 }
 
 // ItemsLoaded reports whether the item-name database has loaded.
