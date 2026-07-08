@@ -63,9 +63,15 @@ type Config struct {
 	// AchievementsURL is the source for Destiny Board index->id data (achievements.xml).
 	// Empty means "<IngestBaseURL>/achievements.xml".
 	AchievementsURL string `json:"achievementsUrl"`
+	// MobsURL is the source for mob index->name data (mobs.json). Empty means
+	// "<IngestBaseURL>/mobs.json" (our mirror).
+	MobsURL string `json:"mobsUrl"`
 	// CaptureDevice optionally restricts capture to one device (by description
 	// substring). Empty captures on all devices.
 	CaptureDevice string `json:"captureDevice"`
+	// LastCharacter is the most recently detected in-game character, restored at
+	// startup so the client knows your name before it captures a fresh Join packet.
+	LastCharacter string `json:"lastCharacter"`
 
 	// Ingest topic/path segments.
 	MarketOrdersTopic    string `json:"marketOrdersTopic"`
@@ -150,6 +156,15 @@ func (c Config) EffectiveAchievementsURL() string {
 		return c.AchievementsURL
 	}
 	return c.IngestBaseURL + "/achievements.xml"
+}
+
+// EffectiveMobsURL returns the configured mob-name JSON URL, defaulting to
+// "<IngestBaseURL>/mobs.json" (our mirror) when empty.
+func (c Config) EffectiveMobsURL() string {
+	if c.MobsURL != "" {
+		return c.MobsURL
+	}
+	return c.IngestBaseURL + "/mobs.json"
 }
 
 // Save writes config to path (pretty-printed).

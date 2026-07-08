@@ -1,10 +1,17 @@
 package main
 
-var sessionKinds = []string{"gathering", "dungeon", "loot"}
+// Session kinds. "dungeon" scopes fame + damage + loot for a PvE run; "pvp" is a
+// separate damage-only session for open-world / arena fights; "gathering" is its
+// own thing. Loot no longer has its own session — it rides the dungeon session.
+var sessionKinds = []string{"gathering", "dungeon", "pvp"}
 
-// StartSession starts a capture session for a kind (gathering/dungeon/loot);
-// the manager opens a server session and tags uploads with its id while active.
+// StartSession starts a capture session for a kind (gathering/dungeon/pvp); the
+// manager opens a server session and tags uploads with its id while active.
 func (a *App) StartSession(kind string) {
+	// dungeon/pvp both scope the damage meter (+ fame on dungeon): begin fresh.
+	if kind == "dungeon" || kind == "pvp" {
+		a.eng.Combat.Reset()
+	}
 	a.sessions.Start(kind)
 	a.eng.Log("Started " + kind + " session.")
 }

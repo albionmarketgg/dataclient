@@ -39,25 +39,30 @@ let snapshot: Snapshot = {
   playerName: "", inGame: false, hasEncryptedData: false, listening: false,
 };
 let stats: Stats = { queued: 0, marketOrders: 0, marketHistory: 0, goldPrices: 0, emv: 0, failed: 0 };
-type UserStats = { trades: number; mails: number; gathering: number; dungeon: number; loot: number; party: number; specs: number; awakened: number };
-let userStats: UserStats = { trades: 0, mails: 0, gathering: 0, dungeon: 0, loot: 0, party: 0, specs: 0, awakened: 0 };
+type UserStats = { trades: number; mails: number; gathering: number; dungeon: number; loot: number; party: number; specs: number; awakened: number; damageMeter: number };
+let userStats: UserStats = { trades: 0, mails: 0, gathering: 0, dungeon: 0, loot: 0, party: 0, specs: 0, awakened: 0, damageMeter: 0 };
 let feed: Feed[] = [];
 let logs: Log[] = [];
 let config: Config | null = null;
 let devices: string[] = [];
 let authEnabled = false;
 let user: { id: string; username: string; avatar: string } = { id: "", username: "", avatar: "" };
+// awakened trait values are computed by the backend and returned on sync; track
+// when each cell started waiting so a stuck roundtrip degrades to a placeholder.
+const awValSince = new Map<string, number>();
+const AW_VAL_TIMEOUT = 10000;
 let authWaiting = false;
 let authPending: { userCode: string; url: string } | null = null;
 let authError = "";
 let verifyMsg = ""; let verifyMsgCls = "dim"; // persists across the verify tab's live re-renders
 // session start time (unix ms, 0 = inactive) per tracker, sourced from the backend
-let sessionStarts: Record<string, number> = { gathering: 0, dungeon: 0, loot: 0 };
-// feed-event timestamps per session-kind (for the "start a session?" suggestion)
-const feedTimes: Record<string, number[]> = { gathering: [], dungeon: [], loot: [] };
-const toastShownAt: Record<string, number> = { gathering: 0, dungeon: 0, loot: 0 };
-const toastDone: Record<string, boolean> = { gathering: false, dungeon: false, loot: false };
-const FEED_KIND_TO_SESSION: Record<string, string> = { gather: "gathering", dungeon: "dungeon", loot: "loot" };
+let sessionStarts: Record<string, number> = { gathering: 0, dungeon: 0, pvp: 0 };
+// feed-event timestamps per session-kind (for the "start a session?" suggestion).
+// pvp has no feed source (started manually); loot activity nudges a dungeon session.
+const feedTimes: Record<string, number[]> = { gathering: [], dungeon: [], pvp: [] };
+const toastShownAt: Record<string, number> = { gathering: 0, dungeon: 0, pvp: 0 };
+const toastDone: Record<string, boolean> = { gathering: false, dungeon: false, pvp: false };
+const FEED_KIND_TO_SESSION: Record<string, string> = { gather: "gathering", dungeon: "dungeon", loot: "dungeon" };
 let route = "dashboard";
 let updateInfo: any = null;     // latest version-check result being shown
 let updateDismissed = "";       // soft update the user clicked "Later" on
@@ -76,6 +81,7 @@ const ICON_PATHS: Record<string, string> = {
   trades: '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
   mails: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M4 7l8 6 8-6"/>',
   dungeon: '<path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/>',
+  damage: '<path d="M3 20h18M6 20V9M11 20V4M16 20v-8"/>',
   gathering: '<path d="M4 20c8 0 15-6 15-15C11 5 4 12 4 20z"/><path d="M9 15c2-3 4-5 7-7"/>',
   loot: '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
   awakened: '<path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4z"/>',
@@ -150,6 +156,7 @@ function buildShell(): HTMLElement {
     ["trades", "Trades"],
     ["mails", "Mails"],
     ["dungeon", "Dungeon"],
+    ["damage", "Damage Meter"],
     ["gathering", "Gathering"],
     ["loot", "Loot"],
     ["awakened", "Awakened Inventory"],
@@ -251,13 +258,14 @@ function renderContent() {
   const content = document.getElementById("content")!;
   const actions = document.getElementById("topactions")!;
   actions.innerHTML = "";
-  title.textContent = ({ dashboard: "Dashboard", feed: "Live Feed", trades: "Trades", mails: "Mails", dungeon: "Dungeon", gathering: "Gathering", loot: "Loot", awakened: "Awakened Inventory", verify: "Verification", logs: "Logs", settings: "Settings" } as any)[route];
+  title.textContent = ({ dashboard: "Dashboard", feed: "Live Feed", trades: "Trades", mails: "Mails", dungeon: "Dungeon", damage: "Damage Meter", gathering: "Gathering", loot: "Loot", awakened: "Awakened Inventory", verify: "Verification", logs: "Logs", settings: "Settings" } as any)[route];
 
   if (route === "dashboard") return renderDashboard(content, actions);
   if (route === "feed") return renderFeed(content, actions);
   if (route === "trades") return renderTrades(content, actions);
   if (route === "mails") return renderMails(content, actions);
   if (route === "dungeon") return renderDungeon(content, actions);
+  if (route === "damage") return renderDamageMeter(content, actions);
   if (route === "gathering") return renderGathering(content, actions);
   if (route === "loot") return renderLoot(content, actions);
   if (route === "awakened") return renderAwakened(content, actions);
@@ -341,9 +349,9 @@ async function toggleSession(key: string, start: boolean) {
   renderContent();
 }
 
-function sessionBar(actions: HTMLElement, key: string) {
+function sessionBar(actions: HTMLElement, key: string, label = "Session") {
   const running = sessionStarts[key] > 0;
-  const btn = el(`<button class="btn ${running ? "ghost" : ""}">${running ? "Stop Session" : "Start Session"}</button>`);
+  const btn = el(`<button class="btn ${running ? "ghost" : ""}">${running ? "Stop " + label : "Start " + label}</button>`);
   btn.addEventListener("click", () => toggleSession(key, !running));
   actions.appendChild(btn);
 }
@@ -355,7 +363,7 @@ function renderSessionTab(content: HTMLElement, actions: HTMLElement, key: strin
   const start = sessionStarts[key];
   const live = start > 0;
   content.innerHTML = `
-    <div class="grid cards" style="margin-bottom:16px">
+    <div class="grid cards single" style="margin-bottom:16px">
       <div class="card"><div class="label">${title} session ${live ? '<span class="live"><span class="dot ok"></span>running</span>' : ""}</div><div class="value accent">${hhmmssDur(live ? Date.now() - start : 0)}</div></div>
     </div>
     <div class="panel"><h3>${title} capture log</h3><div id="klog"></div></div>
@@ -367,12 +375,127 @@ function renderGathering(content: HTMLElement, actions: HTMLElement) {
   renderSessionTab(content, actions, "gathering", "Gathering", "gather", "No gathering captured yet. Harvest or fish in-game and it appears here.");
 }
 
-function renderDungeon(content: HTMLElement, actions: HTMLElement) {
-  renderSessionTab(content, actions, "dungeon", "Dungeon", "dungeon", "No dungeon activity captured yet. Fame and silver from dungeon runs appear here.");
+// meterHTML renders damage-meter encounter blocks from a CombatSnapshot.
+// one participant row: name, damage bar, DPS, damage taken, healing.
+function mtrRow(p: any, maxDmg: number): string {
+  const pct = Math.round(((p.damageDealt || 0) / maxDmg) * 100);
+  return `<div class="mtr-row ${p.isParty ? "party" : ""}">
+    <div class="mtr-name">${escapeHtml(p.name || "?")}</div>
+    <div class="mtr-bar"><div class="mtr-fill" style="width:${pct}%"></div><span class="mtr-dmg">${fmt(p.damageDealt || 0)}</span></div>
+    <div class="mtr-dps">${fmt(Math.round(p.dps || 0))}/s</div>
+    <div class="mtr-taken">${p.damageTaken ? fmt(p.damageTaken) : ""}</div>
+    <div class="mtr-heal">${p.healingDone ? "+" + fmt(p.healingDone) : ""}</div>
+  </div>`;
 }
 
-function renderLoot(content: HTMLElement, actions: HTMLElement) {
-  renderSessionTab(content, actions, "loot", "Loot", "loot", "No loot captured yet. Items picked up by you and nearby players appear here.");
+const mtrLegend = `<div class="mtr-legend"><span class="mtr-name">Player</span><span class="mtr-bar-l">Damage</span><span class="mtr-dps">DPS</span><span class="mtr-taken">Taken</span><span class="mtr-heal">Heal</span></div>`;
+
+// per-encounter breakdown (the fight log).
+function meterHTML(snap: any, limit?: number): string {
+  const encs: any[] = snap?.encounters || [];
+  if (!encs.length) return `<div class="mtr-wrap"><div class="empty">No combat yet — damage, healing and DPS from fights appear here.</div></div>`;
+  const body = encs.slice(0, limit ?? encs.length).map((e) => {
+    const parts: any[] = e.participants || [];
+    const maxDmg = Math.max(1, ...parts.map((p) => p.damageDealt || 0));
+    const rows = parts.map((p) => mtrRow(p, maxDmg)).join("");
+    return `<div class="mtr-enc">
+      <div class="mtr-head"><b>Encounter #${e.number}</b>${e.active ? '<span class="live"><span class="dot ok"></span>live</span>' : ""}<span class="dim" style="margin-left:auto">${e.durationSeconds}s · Fame ${fmt(e.fame || 0)} · Silver ${fmt(e.silver || 0)}</span></div>
+      ${rows || '<div class="dim">No participants.</div>'}
+    </div>`;
+  }).join("");
+  return `<div class="mtr-wrap">${body}</div>`;
+}
+
+// cumulative fame line chart (inline SVG) + total / fame-per-hour headline.
+function fameChartHTML(series: any): string {
+  const pts: any[] = series?.points || [];
+  const head = `<div class="fame-stats">
+    <div><div class="label">Total fame</div><div class="value">${fmt(series?.total || 0)}</div></div>
+    <div><div class="label">Fame / hour</div><div class="value accent">${fmt(series?.famePerHour || 0)}</div></div>
+  </div>`;
+  if (pts.length < 2) return `<div class="fame-wrap">${head}<div class="empty">Fame over time charts here once you start earning.</div></div>`;
+  const W = 600, H = 150, padT = 10, padB = 8, padX = 6;
+  const maxT = pts[pts.length - 1].t || 1;
+  const maxY = Math.max(1, ...pts.map((p) => p.cumulative));
+  const px = (t: number) => padX + (t / maxT) * (W - 2 * padX);
+  const py = (v: number) => H - padB - (v / maxY) * (H - padT - padB);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${px(p.t).toFixed(1)} ${py(p.cumulative).toFixed(1)}`).join(" ");
+  const area = `M${px(0).toFixed(1)} ${(H - padB).toFixed(1)} ${pts.map((p) => `L${px(p.t).toFixed(1)} ${py(p.cumulative).toFixed(1)}`).join(" ")} L${px(maxT).toFixed(1)} ${(H - padB).toFixed(1)} Z`;
+  return `<div class="fame-wrap">${head}
+    <svg class="fame-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative fame over time">
+      <path d="${area}" class="fame-area"/>
+      <path d="${line}" class="fame-line" vector-effect="non-scaling-stroke"/>
+    </svg></div>`;
+}
+
+// session-aggregated summary: solo stat cards when alone, else the group table.
+function summaryHTML(summary: any): string {
+  const parts: any[] = summary?.participants || [];
+  if (!parts.length) return `<div class="mtr-wrap"><div class="empty">No combat yet — your damage, DPS and healing appear here.</div></div>`;
+  const self = parts.find((p) => p.isSelf);
+  const others = parts.filter((p) => !p.isSelf);
+  if (self && others.length === 0) {
+    const card = (label: string, value: string) => `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+    return `<div class="grid cards mtr-solo">
+      ${card("Damage made", fmt(self.damageDealt || 0))}
+      ${card("Damage taken", fmt(self.damageTaken || 0))}
+      ${card("DPS", fmt(Math.round(self.dps || 0)) + "/s")}
+      ${card("Healing", fmt(self.healingDone || 0))}
+    </div>`;
+  }
+  const maxDmg = Math.max(1, ...parts.map((p) => p.damageDealt || 0));
+  return `<div class="mtr-wrap">${mtrLegend}${parts.map((p) => mtrRow(p, maxDmg)).join("")}</div>`;
+}
+
+async function renderDungeon(content: HTMLElement, actions: HTMLElement) {
+  sessionBar(actions, "dungeon");
+  const start = sessionStarts["dungeon"];
+  const live = start > 0;
+  const summary = (await App()?.GetCombatSummary()) || { participants: [] };
+  const fame = (await App()?.GetFameSeries()) || { points: [] };
+  content.innerHTML = `
+    <div class="grid cards single" style="margin-bottom:16px">
+      <div class="card"><div class="label">Dungeon session ${live ? '<span class="live"><span class="dot ok"></span>running</span>' : ""}</div><div class="value accent">${hhmmssDur(live ? Date.now() - start : 0)}</div></div>
+    </div>
+    <div class="panel" style="margin-bottom:16px"><h3>Damage meter <span class="dim" style="font-weight:400">· group totals</span></h3>${summaryHTML(summary)}</div>
+    <div class="panel" style="margin-bottom:16px"><h3>Fame</h3>${fameChartHTML(fame)}</div>
+    <div class="panel"><h3>Dungeon capture log</h3><div id="klog"></div></div>
+    ${websiteNote}`;
+  renderKindLog(content.querySelector("#klog")!, ["dungeon"], "No dungeon activity captured yet. Fame and silver from dungeon runs appear here.");
+}
+
+async function renderDamageMeter(content: HTMLElement, actions: HTMLElement) {
+  sessionBar(actions, "pvp", "PvP Session");
+  const pvpStart = sessionStarts["pvp"];
+  const pvpLive = pvpStart > 0;
+  const combat = (await App()?.GetCombat()) || { encounters: [] };
+  const summary = (await App()?.GetCombatSummary()) || { participants: [] };
+  const synced = (config?.uploadCombat !== false);
+  content.innerHTML = `
+    <div class="grid cards single" style="margin-bottom:16px">
+      <div class="card"><div class="label">PvP session ${pvpLive ? '<span class="live"><span class="dot ok"></span>running</span>' : ""}</div><div class="value accent">${hhmmssDur(pvpLive ? Date.now() - pvpStart : 0)}</div></div>
+    </div>
+    <div class="panel" style="margin-bottom:16px">
+      <h3 class="mtr-h3">Session summary<button class="btn ghost sm" id="mtrClear" style="margin-left:auto;width:auto;padding:0 12px">Clear</button></h3>
+      ${summaryHTML(summary)}
+    </div>
+    <div class="panel">
+      <h3>Fights</h3>
+      <div class="aw-log-head dim">Per-fight breakdown. ${synced
+        ? "Synced to <b>albionmarket.gg</b> while a <b>Dungeon</b> or <b>PvP</b> session is running."
+        : "Enable the Dungeon data toggle in Settings to sync these."}</div>
+      ${meterHTML(combat)}
+    </div>${websiteNote}`;
+  content.querySelector("#mtrClear")?.addEventListener("click", async () => { await App()?.ResetCombat(); renderContent(); });
+}
+
+function renderLoot(content: HTMLElement, _actions: HTMLElement) {
+  content.innerHTML = `
+    <div class="panel">
+      <div class="aw-log-head dim">Loot you and nearby players pick up. Captured continuously and synced to <b>albionmarket.gg</b> as part of your <b>Dungeon session</b>.</div>
+      <div id="klog"></div>
+    </div>${websiteNote}`;
+  renderKindLog(content.querySelector("#klog")!, ["loot"], "No loot captured yet. Items you and nearby players pick up appear here.");
 }
 
 const QUALITY_NAMES: Record<number, string> = { 1: "Normal", 2: "Good", 3: "Outstanding", 4: "Excellent", 5: "Masterpiece" };
@@ -382,8 +505,30 @@ async function renderAwakened(content: HTMLElement, _actions: HTMLElement) {
   const snap = (await App()?.GetAwakenedItems()) || { items: [] };
   const items: any[] = snap.items || [];
   const synced = config?.uploadAwakened !== false;
+  // trait values come from the backend on sync; we can only resolve them when
+  // logged in AND awakened sync is enabled.
+  const canResolve = !!user.id && synced;
 
-  const trait = (t: any[], n: number) => (t && t[n]) ? `${escapeHtml(t[n].name)} <span class="dim">+${Number(t[n].value || 0).toFixed(2)}${t[n].percent ? "%" : ""}</span>` : "<span class='dim'>—</span>";
+  // trait cell: name + backend value (resolved), a loading skeleton while the sync
+  // roundtrip is in flight, a timeout placeholder if it never lands, or a hint when
+  // we can't sync at all.
+  const trait = (it: any, n: number) => {
+    const t = it.traits && it.traits[n];
+    if (!t) return "<span class='dim'>—</span>";
+    const name = escapeHtml(t.name || t.id || "");
+    if (t.resolved) {
+      awValSince.delete(`${it.soulId}:${n}`);
+      return `${name} <span class="dim">+${Number(t.value || 0).toFixed(2)}${t.percent ? "%" : ""}</span>`;
+    }
+    if (!canResolve) return `${name} <span class="dim">·</span>`;
+    const key = `${it.soulId}:${n}`;
+    let since = awValSince.get(key);
+    if (since === undefined) { since = Date.now(); awValSince.set(key, since); }
+    if (Date.now() - since > AW_VAL_TIMEOUT) {
+      return `${name} <span class="dim" title="Couldn't load the value — it'll retry on the next sync.">value unavailable</span>`;
+    }
+    return `${name} <span class="aw-skel skeleton"></span>`;
+  };
   const rows = items.map((it) => {
     const qn = QUALITY_NAMES[it.quality] || "";
     return `<tr>
@@ -393,19 +538,23 @@ async function renderAwakened(content: HTMLElement, _actions: HTMLElement) {
       <td>${escapeHtml(it.attunedTo || snapshot.playerName || "—")}</td>
       <td>${dec2(it.attunement)}</td>
       <td>${dec2(it.strain)}x</td>
-      <td>${trait(it.traits, 0)}</td>
-      <td>${trait(it.traits, 1)}</td>
-      <td>${trait(it.traits, 2)}</td>
+      <td>${trait(it, 0)}</td>
+      <td>${trait(it, 1)}</td>
+      <td>${trait(it, 2)}</td>
       <td>${escapeHtml(it.location || "—")}</td>
     </tr>`;
   }).join("");
 
+  const headNote = canResolve
+    ? "Exact trait values are computed on your <b>albionmarket.gg</b> dashboard and fill in here a few seconds after sync."
+    : !user.id
+      ? "Trait values are computed on <b>albionmarket.gg</b> — <b>sign in</b> and enable Awakened sync in Settings to see them."
+      : "Trait values are computed on <b>albionmarket.gg</b> — enable <b>Awakened sync</b> in Settings to see them.";
+
   content.innerHTML = `
     <div class="panel">
       <div class="aw-log-head dim">
-        Awakened weapons detected in your inventory. ${synced
-          ? "Synced to your <b>albionmarket.gg</b> dashboard, where you can list them for sale."
-          : `Syncing is <b>off</b> — enable it in Settings to send these to your dashboard.`}
+        Awakened weapons detected in your inventory. ${headNote}
       </div>
       ${items.length ? `<div class="table-wrap"><table class="aw-table">
         <thead><tr>
@@ -485,6 +634,7 @@ function renderDashboard(content: HTMLElement, actions: HTMLElement) {
       ${cardsDiv("Party", fmt(userStats.party))}
       ${cardsDiv("Specs", fmt(userStats.specs))}
       ${cardsDiv("Awakened", fmt(userStats.awakened))}
+      ${cardsDiv("Damage", fmt(userStats.damageMeter))}
     </div>
     <div class="panel">
       <h3>Recent Captures</h3>
@@ -644,7 +794,7 @@ const TOAST_RATE = 5;                      // events in the last 60s to suggest
 function renderToasts() {
   let host = document.getElementById("toasts");
   if (!host) { host = document.createElement("div"); host.id = "toasts"; document.body.appendChild(host); }
-  const active = ["gathering", "dungeon", "loot"].filter((k) => toastShownAt[k] > 0);
+  const active = ["gathering", "dungeon", "pvp"].filter((k) => toastShownAt[k] > 0);
   host.innerHTML = active.map((k) => `
     <div class="toast">
       <div>
@@ -668,10 +818,10 @@ function renderToasts() {
 // tick refreshes session state and decides whether to surface a suggestion.
 async function tick() {
   const s = await App()?.GetSessions();
-  if (s) sessionStarts = { gathering: s.gathering || 0, dungeon: s.dungeon || 0, loot: s.loot || 0 };
+  if (s) sessionStarts = { gathering: s.gathering || 0, dungeon: s.dungeon || 0, pvp: s.pvp || 0 };
   const now = Date.now();
   let changed = false;
-  for (const k of ["gathering", "dungeon", "loot"]) {
+  for (const k of ["gathering", "dungeon", "pvp"]) {
     feedTimes[k] = feedTimes[k].filter((t) => now - t < 60000);
     if (toastShownAt[k] > 0 && now - toastShownAt[k] > TOAST_TTL) { toastShownAt[k] = 0; toastDone[k] = true; changed = true; }
     if (sessionStarts[k] > 0) { toastShownAt[k] = 0; } // active -> no suggestion
@@ -680,7 +830,7 @@ async function tick() {
     }
   }
   if (changed) renderToasts();
-  if (["dungeon", "gathering", "loot", "verify"].includes(route)) renderContent();
+  if (["dungeon", "damage", "gathering", "loot", "verify"].includes(route)) renderContent();
   // awakened updates live too, but don't clobber a price field while it's focused
   if (route === "awakened" && (document.activeElement as HTMLElement)?.tagName !== "INPUT") renderContent();
 }
@@ -783,7 +933,7 @@ async function init() {
       authEnabled = (await a.AuthEnabled()) || false;
       user = (await a.GetUser()) || user;
       userStats = (await a.GetUserStats()) || userStats;
-      const ss = await a.GetSessions(); if (ss) sessionStarts = { gathering: ss.gathering || 0, dungeon: ss.dungeon || 0, loot: ss.loot || 0 };
+      const ss = await a.GetSessions(); if (ss) sessionStarts = { gathering: ss.gathering || 0, dungeon: ss.dungeon || 0, pvp: ss.pvp || 0 };
     } catch (e) { /* running outside wails */ }
   }
   render();

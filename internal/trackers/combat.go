@@ -10,13 +10,16 @@ import (
 	"github.com/niick1231/albionmarket_dataclient/internal/photon"
 )
 
-// CombatParticipant is one entity's contribution within an encounter.
+// CombatParticipant is one player's contribution within an encounter (mobs are
+// excluded — their hits on players surface as those players' DamageTaken).
 type CombatParticipant struct {
 	Name        string  `json:"name"`
 	DamageDealt int64   `json:"damageDealt"`
+	DamageTaken int64   `json:"damageTaken"`
 	HealingDone int64   `json:"healingDone"`
 	DPS         float64 `json:"dps"`
 	IsParty     bool    `json:"isParty"`
+	IsSelf      bool    `json:"isSelf"`
 }
 
 // CombatEncounter is a single fight summary.
@@ -32,6 +35,13 @@ type CombatEncounter struct {
 // CombatSnapshot lists recent encounters (most recent first).
 type CombatSnapshot struct {
 	Encounters []CombatEncounter `json:"encounters"`
+}
+
+// CombatSummary aggregates every encounter this session into one per-player table
+// (for the solo/group damage view).
+type CombatSummary struct {
+	DurationSeconds int64               `json:"durationSeconds"`
+	Participants    []CombatParticipant `json:"participants"`
 }
 
 // DungeonEvent is one resolved dungeon gain: a fame event paired with the
@@ -57,8 +67,28 @@ type silverHit struct {
 }
 
 type entityAgg struct {
-	damage  int64
-	healing int64
+	damage  int64 // damage this entity dealt
+	taken   int64 // damage this entity received
+	healing int64 // healing this entity did
+}
+
+// famePoint is one fame gain with its timestamp (for the fame-over-time chart).
+type famePoint struct {
+	at     time.Time
+	amount int64
+}
+
+// FamePoint is a chartable cumulative-fame sample (t = ms since the first gain).
+type FamePoint struct {
+	T          int64 `json:"t"`
+	Cumulative int64 `json:"cumulative"`
+}
+
+// FameSeries is the fame-over-time series plus headline figures.
+type FameSeries struct {
+	Points      []FamePoint `json:"points"`
+	Total       int64       `json:"total"`
+	FamePerHour int64       `json:"famePerHour"`
 }
 
 type encounter struct {
@@ -73,15 +103,20 @@ type encounter struct {
 
 // Combat is a damage-meter style tracker.
 type Combat struct {
-	party *Party
+	party   *Party
+	mobName func(index int) (string, bool) // resolve a NewMob index to a name (may be nil)
+	selfID  func() (int64, bool)           // local player's object id (may be nil)
 
-	mu       sync.Mutex
-	names    map[int64]string
-	encs     []*encounter
-	active   *encounter
-	nextNum  int
-	onChange func()
-	onFeed   func(kind, detail string, count int)
+	mu         sync.Mutex
+	names      map[int64]string
+	selfSeen   map[int64]bool   // object ids that have been the local player (survive zone changes)
+	memberName map[int64]string // object id -> stable group-player name (self or party)
+	encs       []*encounter
+	active     *encounter
+	nextNum    int
+	fameLog    []famePoint // fame gains over time (for the fame chart)
+	onChange   func()
+	onFeed     func(kind, detail string, count int)
 
 	// dungeon-event pairing: each fame event is held briefly, matched with the
 	// nearest silver, then emitted via onDungeon.
@@ -97,9 +132,10 @@ func (c *Combat) OnFeed(fn func(kind, detail string, count int)) { c.onFeed = fn
 // nearest silver. Silver-only activity never fires it.
 func (c *Combat) OnDungeonEvent(fn func(DungeonEvent)) { c.onDungeon = fn }
 
-// NewCombat creates a combat tracker. party may be nil.
-func NewCombat(party *Party) *Combat {
-	return &Combat{party: party, names: map[int64]string{}, nextNum: 1}
+// NewCombat creates a combat tracker. party, mobName and selfID may all be nil
+// (mobs then show as "Mob <index>" and no participant is flagged as self).
+func NewCombat(party *Party, mobName func(int) (string, bool), selfID func() (int64, bool)) *Combat {
+	return &Combat{party: party, mobName: mobName, selfID: selfID, names: map[int64]string{}, selfSeen: map[int64]bool{}, memberName: map[int64]string{}, nextNum: 1}
 }
 
 // OnChange registers a change callback.
@@ -127,9 +163,16 @@ func (c *Combat) onNewCharacter(m map[byte]any) {
 
 func (c *Combat) onNewMob(m map[byte]any) {
 	if obj := i64(m[0]); obj != 0 {
+		idx := iN(m[1])
+		name := "Mob " + itoa(idx)
+		if c.mobName != nil {
+			if n, ok := c.mobName(idx); ok {
+				name = n
+			}
+		}
 		c.mu.Lock()
 		if _, ok := c.names[obj]; !ok {
-			c.names[obj] = "Mob " + itoa(iN(m[1]))
+			c.names[obj] = name
 		}
 		c.mu.Unlock()
 	}
@@ -163,17 +206,27 @@ func (c *Combat) applyHealth(target, causer int64, change float64, now time.Time
 	c.mu.Lock()
 	e := c.ensureEncounter(now)
 	e.lastAt = now
+	// Remember who is us / our party under this zone's object ids, so the session
+	// summary can merge the same player across zone changes (ids are per-zone).
+	c.noteGroup(causer)
+	c.noteGroup(target)
 	agg := e.byEntity[causer]
 	if agg == nil {
 		agg = &entityAgg{}
 		e.byEntity[causer] = agg
 	}
 	if change < 0 {
-		agg.damage += amount
+		agg.damage += amount // causer dealt damage
+		// credit the same hit as damage taken by the target
+		ta := e.byEntity[target]
+		if ta == nil {
+			ta = &entityAgg{}
+			e.byEntity[target] = ta
+		}
+		ta.taken += amount
 	} else {
 		agg.healing += amount
 	}
-	_ = target
 	c.mu.Unlock()
 }
 
@@ -210,6 +263,10 @@ func (c *Combat) onFame(m map[byte]any) {
 	c.mu.Lock()
 	e := c.ensureEncounter(now)
 	e.fame += fame
+	c.fameLog = append(c.fameLog, famePoint{at: now, amount: fame})
+	if len(c.fameLog) > 5000 {
+		c.fameLog = c.fameLog[len(c.fameLog)-5000:]
+	}
 	c.mu.Unlock()
 	c.fire()
 	if c.onFeed != nil {
@@ -304,12 +361,124 @@ func (c *Combat) Reset() {
 	c.encs = nil
 	c.active = nil
 	c.nextNum = 1
+	c.fameLog = nil
 	c.mu.Unlock()
 	c.fire()
 }
 
-// Snapshot returns recent encounters, most recent first.
+// FameSeries returns the cumulative fame-over-time series plus total and an
+// estimated fame/hour (over the span of fame gains, floored at 60s to tame early
+// spikes). Empty when no fame has been gained.
+func (c *Combat) FameSeries() FameSeries {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.fameLog) == 0 {
+		return FameSeries{}
+	}
+	start := c.fameLog[0].at
+	pts := make([]FamePoint, 0, len(c.fameLog)+1)
+	pts = append(pts, FamePoint{T: 0, Cumulative: 0})
+	var cum int64
+	for _, f := range c.fameLog {
+		cum += f.amount
+		pts = append(pts, FamePoint{T: f.at.Sub(start).Milliseconds(), Cumulative: cum})
+	}
+	span := c.fameLog[len(c.fameLog)-1].at.Sub(start)
+	if span < time.Minute {
+		span = time.Minute // floor so a short burst doesn't read as a huge rate
+	}
+	perHour := int64(float64(cum) / span.Hours())
+	return FameSeries{Points: pts, Total: cum, FamePerHour: perHour}
+}
+
+// noteGroup records an object id that currently belongs to the local player or a
+// party member, caching its stable name so the summary can merge it across zone
+// changes (mobs/others are not cached). Caller holds mu.
+func (c *Combat) noteGroup(obj int64) {
+	if obj == 0 {
+		return
+	}
+	if _, ok := c.memberName[obj]; ok {
+		return // already resolved
+	}
+	if c.selfID != nil {
+		if sid, ok := c.selfID(); ok && sid == obj {
+			c.selfSeen[obj] = true
+			if c.party != nil {
+				if ln := c.party.LocalName(); ln != "" {
+					c.memberName[obj] = ln
+				}
+			}
+			return
+		}
+	}
+	if c.party != nil && c.party.IsPartyMember(obj) {
+		if n, ok := c.party.NameByObject(obj); ok && n != "" {
+			c.memberName[obj] = n
+		}
+	}
+}
+
+// resolveName returns the best display name for an object id, preferring the
+// combat/party name caches; falls back to the local player's name for known self
+// ids, else "entity:<id>". Caller holds mu.
+func (c *Combat) resolveName(obj int64) string {
+	if n := c.names[obj]; n != "" {
+		return n
+	}
+	if c.party != nil {
+		if n, ok := c.party.NameByObject(obj); ok && n != "" {
+			return n
+		}
+	}
+	if n := c.memberName[obj]; n != "" {
+		return n
+	}
+	if c.selfSeen[obj] && c.party != nil {
+		if ln := c.party.LocalName(); ln != "" {
+			return ln
+		}
+	}
+	return "Unknown" // unresolved object id (not a named player or mob)
+}
+
+// buildParticipants turns an entity aggregate into a sorted participant list for
+// the per-fight log — all entities, including named mobs. Caller holds mu.
+func (c *Combat) buildParticipants(byEntity map[int64]*entityAgg, dur float64, selfID int64, hasSelf bool) []CombatParticipant {
+	var out []CombatParticipant
+	for obj, agg := range byEntity {
+		if agg.damage == 0 && agg.healing == 0 && agg.taken == 0 {
+			continue
+		}
+		p := CombatParticipant{
+			Name:        c.resolveName(obj),
+			DamageDealt: agg.damage,
+			DamageTaken: agg.taken,
+			HealingDone: agg.healing,
+			DPS:         float64(agg.damage) / dur,
+			IsSelf:      (hasSelf && obj == selfID) || c.selfSeen[obj],
+		}
+		if p.IsSelf || (c.party != nil && c.party.IsPartyMember(obj)) {
+			p.IsParty = true
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].DamageDealt > out[b].DamageDealt })
+	return out
+}
+
+// self returns the local player's object id (0, false if unknown).
+func (c *Combat) self() (int64, bool) {
+	if c.selfID == nil {
+		return 0, false
+	}
+	return c.selfID()
+}
+
+// Snapshot returns recent encounters (most recent first), player participants
+// only. Encounters with no player participants are omitted.
 func (c *Combat) Snapshot() CombatSnapshot {
+	selfID, hasSelf := c.self()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var out []CombatEncounter
@@ -319,38 +488,80 @@ func (c *Combat) Snapshot() CombatSnapshot {
 		if dur < 1 {
 			dur = 1
 		}
-		ce := CombatEncounter{
+		parts := c.buildParticipants(e.byEntity, dur, selfID, hasSelf)
+		if len(parts) == 0 {
+			continue // nothing happened — don't log an empty encounter
+		}
+		out = append(out, CombatEncounter{
 			Number:          e.number,
 			DurationSeconds: int64(dur),
 			Active:          e == c.active && !e.ended,
 			Fame:            e.fame,
 			Silver:          e.silver,
-		}
-		for obj, agg := range e.byEntity {
-			if agg.damage == 0 && agg.healing == 0 {
-				continue
-			}
-			name := c.names[obj]
-			if name == "" {
-				name = "entity:" + itoa(int(obj))
-			}
-			p := CombatParticipant{
-				Name:        name,
-				DamageDealt: agg.damage,
-				HealingDone: agg.healing,
-				DPS:         float64(agg.damage) / dur,
-			}
-			if c.party != nil {
-				p.IsParty = c.party.IsPartyMember(obj)
-			}
-			ce.Participants = append(ce.Participants, p)
-		}
-		sort.Slice(ce.Participants, func(a, b int) bool {
-			return ce.Participants[a].DamageDealt > ce.Participants[b].DamageDealt
+			Participants:    parts,
 		})
-		out = append(out, ce)
 	}
 	return CombatSnapshot{Encounters: out}
+}
+
+// SessionSummary aggregates all encounters this session into one per-player table
+// (the group totals). It merges by stable player NAME so the same player survives
+// zone changes (object ids are per-zone); only the local player + party members
+// are included. DPS is over total combat time across encounters.
+func (c *Combat) SessionSummary() CombatSummary {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	localName := ""
+	if c.party != nil {
+		localName = c.party.LocalName()
+	}
+	byName := map[string]*entityAgg{}
+	var total float64
+	for _, e := range c.encs {
+		d := e.lastAt.Sub(e.started).Seconds()
+		if d < 1 {
+			d = 1
+		}
+		total += d
+		for obj, a := range e.byEntity {
+			name := c.memberName[obj]
+			if name == "" {
+				if c.selfSeen[obj] && localName != "" {
+					name = localName
+				} else {
+					continue // not a known group member (mob / other player)
+				}
+			}
+			g := byName[name]
+			if g == nil {
+				g = &entityAgg{}
+				byName[name] = g
+			}
+			g.damage += a.damage
+			g.taken += a.taken
+			g.healing += a.healing
+		}
+	}
+	if total < 1 {
+		total = 1
+	}
+	out := make([]CombatParticipant, 0, len(byName))
+	for name, a := range byName {
+		if a.damage == 0 && a.healing == 0 && a.taken == 0 {
+			continue
+		}
+		out = append(out, CombatParticipant{
+			Name:        name,
+			DamageDealt: a.damage,
+			DamageTaken: a.taken,
+			HealingDone: a.healing,
+			DPS:         float64(a.damage) / total,
+			IsParty:     true,
+			IsSelf:      name == localName,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DamageDealt > out[j].DamageDealt })
+	return CombatSummary{DurationSeconds: int64(total), Participants: out}
 }
 
 func toFloat(v any) (float64, bool) {

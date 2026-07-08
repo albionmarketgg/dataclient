@@ -11,48 +11,12 @@ import (
 	"github.com/niick1231/albionmarket_dataclient/internal/photon"
 )
 
-// traitBase is each trait's base value (from the legendary spell data). The
-// displayed value is base × rollFactor, where rollFactor = minfactor +
-// raw×(maxfactor−minfactor) with the game's single "default" config
-// (minfactor 0.01, maxfactor 1). base >= 1 → a flat stat (rounded int); base < 1
-// → a percentage (×100).
-var traitBase = map[string]float64{
-	"TRAIT_ITEM_POWER":             120,
-	"TRAIT_HITPOINTS_MAX":          260,
-	"TRAIT_ENERGY_MAX":             52,
-	"TRAIT_CC_RESIST":              16,
-	"TRAIT_THREAT_BONUS":           2,
-	"TRAIT_ENERGY_COST_REDUCTION":  0.24,
-	"TRAIT_HEALING_DEALT":          0.15,
-	"TRAIT_HEALING_RECEIVED":       0.15,
-	"TRAIT_ATTACK_SPEED":           0.24,
-	"TRAIT_ATTACK_RANGE":           0.20,
-	"TRAIT_CAST_SPEED_INCREASE":    0.20,
-	"TRAIT_COOLDOWN_REDUCTION":     0.12,
-	"TRAIT_MOB_FAME":               0.30,
-	"TRAIT_RESILIENCE_PENETRATION": 0.14,
-	"TRAIT_DEFENSE_BONUS":          0.14,
-	"TRAIT_ABILITY_DAMAGE":         0.165,
-	"TRAIT_AUTO_ATTACK_DAMAGE":     0.24,
-	"TRAIT_CC_DURATION":            0.32,
-	"TRAIT_LIFESTEAL":              0.10,
-}
-
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
-// computeTraitValue turns the raw packet roll (0-1) into the real trait value.
-// Returns the value and whether it's a percentage.
-func computeTraitValue(id string, raw float64) (value float64, percent bool) {
-	base, ok := traitBase[id]
-	if !ok {
-		return raw, false
-	}
-	scaled := base * (0.01 + raw*0.99)
-	if base >= 1 { // flat stat, 2 dp
-		return round2(scaled), false
-	}
-	return round2(scaled * 100), true // percentage, 2 dp
-}
+// Trait values are NOT computed here. Strict separation of concerns: the client
+// captures the raw roll and sends it; the website backend computes the real value
+// (base × rollFactor × progression^(itemPower/100)) and returns it in the sync
+// response, which we apply via ApplyValues. See AWAKENED_TRAIT_VALUE_MIGRATION.md.
 
 // traitNames maps raw packet trait ids to display labels. Only these 19 exist, so
 // a static map is enough (no runtime lookup pipeline). Used for local display;
@@ -87,13 +51,16 @@ func traitName(id string) string {
 }
 
 // AwakenedTrait is one rolled trait on an awakened item. ID is the raw packet id
-// (e.g. "TRAIT_ITEM_POWER"); Name is resolved locally for display only — uploads
-// send the id and the backend resolves the label.
+// (e.g. "TRAIT_ITEM_POWER"); Name is labeled locally for display. Roll is the raw
+// 0-1 packet roll we upload; Value/Percent are filled from the backend sync
+// response (see ApplyValue) — the client computes no values itself.
 type AwakenedTrait struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	Value   float64 `json:"value"`   // resolved display value (flat int or % number)
-	Percent bool    `json:"percent"` // display/interpret as a percentage
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Roll     float64 `json:"roll"`     // raw 0-1 roll (uploaded; backend computes the value)
+	Value    float64 `json:"value"`    // backend-computed display value (0 until resolved)
+	Percent  bool    `json:"percent"`  // backend-provided: render as a percentage
+	Resolved bool    `json:"resolved"` // true once the backend returned a value
 }
 
 // AwakenedItem is a single awakened/attuned item in the player's inventory,
@@ -110,6 +77,8 @@ type AwakenedItem struct {
 	Strain     float64         `json:"strain"`     // accumulated strain (/10000)
 	Traits     []AwakenedTrait `json:"traits"`     // up to 3
 	Location   string          `json:"location"`   // where the item lives (from container events)
+
+	updated int64 // per-tracker sequence of the last packet update (dedup tie-break)
 }
 
 // AwakenedSnapshot is the current awakened-inventory list.
@@ -126,7 +95,7 @@ type Awakened struct {
 
 	mu       sync.Mutex
 	items    map[string]*AwakenedItem // keyed by objectId (string)
-	hidden   map[string]bool          // keys the user removed from the table
+	seq      int64                    // monotonic update counter (stamps AwakenedItem.updated)
 	onChange func()
 }
 
@@ -137,7 +106,7 @@ func NewAwakened(info ItemInfo, serverID func() int, playerName func() string, l
 	if info == nil {
 		info = nopItems{}
 	}
-	return &Awakened{info: info, serverID: serverID, playerName: playerName, location: location, items: map[string]*AwakenedItem{}, hidden: map[string]bool{}}
+	return &Awakened{info: info, serverID: serverID, playerName: playerName, location: location, items: map[string]*AwakenedItem{}}
 }
 
 // curLocation returns the current mapped location name (empty when unmapped).
@@ -195,6 +164,8 @@ func (a *Awakened) onEquipment(m map[byte]any) {
 	if loc != "" {
 		it.Location = loc
 	}
+	a.seq++
+	it.updated = a.seq
 	a.mu.Unlock()
 	a.fire()
 }
@@ -216,12 +187,12 @@ func (a *Awakened) onSoul(m map[byte]any) {
 	vals := toFloatSlice(m[9])
 	traits := make([]AwakenedTrait, 0, len(ids))
 	for i, id := range ids {
-		v := 0.0
+		roll := 0.0
 		if i < len(vals) {
-			v = vals[i]
+			roll = vals[i]
 		}
-		val, pct := computeTraitValue(id, v)
-		traits = append(traits, AwakenedTrait{ID: id, Name: traitName(id), Value: val, Percent: pct})
+		// Store the raw roll only; the backend computes and returns the value.
+		traits = append(traits, AwakenedTrait{ID: id, Name: traitName(id), Roll: roll})
 	}
 	soulID := ""
 	if b, ok := m[1].([]byte); ok && len(b) > 0 {
@@ -241,6 +212,8 @@ func (a *Awakened) onSoul(m map[byte]any) {
 	it.Strain = float64(i64(m[6])) / 10000
 	it.Attunement = float64(i64(m[7])) / 10000
 	it.Traits = traits
+	a.seq++
+	it.updated = a.seq
 	a.mu.Unlock()
 	a.fire()
 }
@@ -263,27 +236,10 @@ func (a *Awakened) Upsert(it AwakenedItem) {
 	a.fire()
 }
 
-// Remove hides an item from the table by its Key (so re-capture won't re-add it).
-func (a *Awakened) Remove(key string) {
-	if key == "" {
-		return
-	}
-	a.mu.Lock()
-	a.hidden[key] = true
-	for oid, it := range a.items {
-		if it.Key == key {
-			delete(a.items, oid)
-		}
-	}
-	a.mu.Unlock()
-	a.fire()
-}
-
-// Reset clears all tracked items and un-hides everything.
+// Reset clears all tracked items.
 func (a *Awakened) Reset() {
 	a.mu.Lock()
 	a.items = map[string]*AwakenedItem{}
-	a.hidden = map[string]bool{}
 	a.mu.Unlock()
 	a.fire()
 }
@@ -300,7 +256,8 @@ func (a *Awakened) SyncBody() any {
 		}
 		traits := make([]map[string]any, 0, len(it.Traits))
 		for _, tr := range it.Traits {
-			traits = append(traits, map[string]any{"id": tr.ID, "value": tr.Value})
+			// v2 contract: send the raw roll only; backend computes the value.
+			traits = append(traits, map[string]any{"id": tr.ID, "roll": tr.Roll})
 		}
 		m := map[string]any{
 			"soulId":     it.SoulID,
@@ -318,7 +275,47 @@ func (a *Awakened) SyncBody() any {
 		}
 		items = append(items, m)
 	}
-	return map[string]any{"items": items}
+	return map[string]any{"v": 2, "items": items}
+}
+
+// ResolvedTrait is a backend-computed trait value applied back onto the table.
+type ResolvedTrait struct {
+	ID      string
+	Value   float64
+	Percent bool
+}
+
+// ApplyValues writes backend-computed trait values (from the sync response) onto
+// every tracked item with the given soulId, matching by trait id, and marks them
+// resolved. Fires a change so the UI repaints skeletons into values. The uploaded
+// body (id + roll) is unaffected, so this never triggers a re-sync loop.
+func (a *Awakened) ApplyValues(soulID string, traits []ResolvedTrait) {
+	if soulID == "" || len(traits) == 0 {
+		return
+	}
+	byID := make(map[string]ResolvedTrait, len(traits))
+	for _, t := range traits {
+		byID[t.ID] = t
+	}
+	a.mu.Lock()
+	changed := false
+	for _, it := range a.items {
+		if it.SoulID != soulID {
+			continue
+		}
+		for i := range it.Traits {
+			if rv, ok := byID[it.Traits[i].ID]; ok {
+				it.Traits[i].Value = rv.Value
+				it.Traits[i].Percent = rv.Percent
+				it.Traits[i].Resolved = true
+				changed = true
+			}
+		}
+	}
+	a.mu.Unlock()
+	if changed {
+		a.fire()
+	}
 }
 
 // Snapshot returns tracked items deduped by stable Key (soulId), skipping
@@ -326,16 +323,37 @@ func (a *Awakened) SyncBody() any {
 func (a *Awakened) Snapshot() AwakenedSnapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// Several objectId records can share one soulId (the same item re-observed under
+	// a new objectId). Merge deterministically: the most recently updated packet wins
+	// the volatile fields (attunement/strain/traits/...), and static item details are
+	// backfilled from whichever record has them. Without this the display flickers
+	// between two records' attunement values on random map iteration order.
 	byKey := make(map[string]AwakenedItem, len(a.items))
 	for _, it := range a.items {
-		if a.hidden[it.Key] {
-			continue
+		cur := *it
+		if prev, ok := byKey[cur.Key]; ok {
+			newer, older := cur, prev
+			if prev.updated > cur.updated {
+				newer, older = prev, cur
+			}
+			if newer.ItemID == "" {
+				newer.ItemID = older.ItemID
+			}
+			if newer.Name == "" {
+				newer.Name = older.Name
+			}
+			if newer.Quality == 0 {
+				newer.Quality = older.Quality
+			}
+			if newer.AttunedTo == "" {
+				newer.AttunedTo = older.AttunedTo
+			}
+			if newer.Location == "" {
+				newer.Location = older.Location
+			}
+			cur = newer
 		}
-		// prefer the most complete record for a given key (item details present)
-		if prev, ok := byKey[it.Key]; ok && prev.ItemID != "" && it.ItemID == "" {
-			continue
-		}
-		byKey[it.Key] = *it
+		byKey[cur.Key] = cur
 	}
 	out := make([]AwakenedItem, 0, len(byKey))
 	for _, it := range byKey {

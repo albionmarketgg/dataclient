@@ -1,11 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +62,20 @@ func NewApp(cfgPath string) *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.eng.OnState(func(s state.Snapshot) { runtime.EventsEmit(ctx, "state", s) })
+	// Seed the character name from the last session so loot/combat attribute to your
+	// IGN immediately, even before we capture this session's Join packet. A fresh
+	// Join overrides it within seconds of playing.
+	if a.cfg.LastCharacter != "" {
+		a.eng.State.SetPlayerName(a.cfg.LastCharacter)
+	}
+	a.eng.OnState(func(s state.Snapshot) {
+		// remember the detected character so the next launch knows it up front.
+		if s.PlayerName != "" && s.PlayerName != a.cfg.LastCharacter {
+			a.cfg.LastCharacter = s.PlayerName
+			go a.cfg.Save(a.cfgPath)
+		}
+		runtime.EventsEmit(ctx, "state", s)
+	})
 	a.eng.OnFeed(func(ev handlers.CaptureEvent) { runtime.EventsEmit(ctx, "feed", ev) })
 	a.eng.OnLog(func(l engine.LogLine) { runtime.EventsEmit(ctx, "log", l) })
 	a.eng.OnCaptureError(func(msg string) {
@@ -229,91 +238,6 @@ func (a *App) ToggleCapture(on bool) {
 // GetAwakenedItems returns the current awakened-inventory snapshot.
 func (a *App) GetAwakenedItems() trackers.AwakenedSnapshot { return a.eng.Awakened.Snapshot() }
 
-// AwakenedSellItem is one item to list, with its own price (0 == offers only).
-type AwakenedSellItem struct {
-	Key   string `json:"key"`
-	Price int64  `json:"price"`
-}
-
-// AwakenedSellRequest lists one or more awakened items, each at its own price.
-type AwakenedSellRequest struct {
-	Items []AwakenedSellItem `json:"items"`
-}
-
-// RemoveAwakened hides an item from the Awakened Inventory table.
-func (a *App) RemoveAwakened(key string) { a.eng.Awakened.Remove(key) }
-
-// SellOnAlbionMarket lists the given awakened items for sale on albionmarket.gg,
-// each at its own price (0 == offers only). Works for a single item or a bulk
-// list. Login-gated. Returns "" on success, else an error message.
-//
-// TODO: confirm the endpoint + payload with the web agent (see the sell API outline).
-func (a *App) SellOnAlbionMarket(req AwakenedSellRequest) string {
-	if len(req.Items) == 0 {
-		return "no items selected"
-	}
-	jwt, _, ok := a.tokenProvider()
-	if !ok {
-		return "please sign in first"
-	}
-	byKey := map[string]trackers.AwakenedItem{}
-	for _, it := range a.eng.Awakened.Snapshot().Items {
-		byKey[it.Key] = it
-	}
-	// Per-item payload: itemId + serverId + quality + strain + traits + price.
-	// Seller identity comes from the JWT + serverId (backend checks the user has a
-	// verified character there); attuned-to name and display strings are dropped.
-	items := make([]map[string]any, 0, len(req.Items))
-	for _, sel := range req.Items {
-		it, found := byKey[sel.Key]
-		if !found {
-			continue
-		}
-		traits := make([]map[string]any, 0, len(it.Traits))
-		for _, tr := range it.Traits {
-			traits = append(traits, map[string]any{"id": tr.ID, "value": tr.Value})
-		}
-		items = append(items, map[string]any{
-			"itemId":   it.ItemID,
-			"serverId": it.ServerID,
-			"quality":  it.Quality,
-			"strain":   it.Strain,
-			"traits":   traits,
-			"price":    sel.Price,
-		})
-	}
-	body := map[string]any{"items": items}
-	if err := a.postJSON(jwt, "/user/awakened/list", body); err != nil {
-		return err.Error()
-	}
-	a.eng.Log(fmt.Sprintf("Listed %d awakened item(s) for sale.", len(items)))
-	return ""
-}
-
-// postJSON is a small authenticated JSON POST helper for bound methods.
-func (a *App) postJSON(jwt, path string, body any) error {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(a.cfg.IngestBaseURL, "/")+path, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("User-Agent", "AlbionMarketDataClient")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
-	}
-	return nil
-}
-
 // GetConfig returns the current configuration.
 func (a *App) GetConfig() config.Config { return a.cfg }
 
@@ -353,8 +277,14 @@ func (a *App) GetParty() trackers.PartySnapshot { return a.eng.Party.Snapshot() 
 // GetGathering returns the gathering session snapshot.
 func (a *App) GetGathering() trackers.GatherSnapshot { return a.eng.Gathering.Snapshot() }
 
-// GetCombat returns the combat snapshot.
+// GetCombat returns the combat snapshot (per-encounter log).
 func (a *App) GetCombat() trackers.CombatSnapshot { return a.eng.Combat.Snapshot() }
+
+// GetCombatSummary returns the session-aggregated per-player damage summary.
+func (a *App) GetCombatSummary() trackers.CombatSummary { return a.eng.Combat.SessionSummary() }
+
+// GetFameSeries returns the cumulative fame-over-time series for the dungeon chart.
+func (a *App) GetFameSeries() trackers.FameSeries { return a.eng.Combat.FameSeries() }
 
 // GetLoot returns the loot snapshot.
 func (a *App) GetLoot() trackers.LootSnapshot { return a.eng.Loot.Snapshot() }

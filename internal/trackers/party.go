@@ -177,6 +177,29 @@ func (p *Party) onSetRole(m map[byte]any) {
 	p.notify()
 }
 
+// LocalName returns the local player's character name (empty until Join).
+func (p *Party) LocalName() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.localName
+}
+
+// NameByObject resolves an object id to a known player name — the local player or
+// a party member whose character we've linked to an object id. ok=false if unknown.
+func (p *Party) NameByObject(objectID int64) (string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if objectID != 0 && objectID == p.localObj && p.localName != "" {
+		return p.localName, true
+	}
+	for _, e := range p.members {
+		if e.objectID == objectID && e.name != "" {
+			return e.name, true
+		}
+	}
+	return "", false
+}
+
 // IsPartyMember reports whether an object id belongs to a tracked party member
 // or the local player.
 func (p *Party) IsPartyMember(objectID int64) bool {

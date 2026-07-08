@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type Snapshots struct {
 	Loot       func() any
 	Party      func() any
 	Awakened   func() any
+	Combat     func() any // damage-meter encounters
 	ServerID   func() int
 	PlayerName func() string // in-game character that produced the data
 }
@@ -38,9 +40,10 @@ type Stats struct {
 	Gathering int64 `json:"gathering"`
 	Dungeon   int64 `json:"dungeon"`
 	Loot      int64 `json:"loot"`
-	Party     int64 `json:"party"`
-	Specs     int64 `json:"specs"`
-	Awakened  int64 `json:"awakened"`
+	Party       int64 `json:"party"`
+	Specs       int64 `json:"specs"`
+	Awakened    int64 `json:"awakened"`
+	DamageMeter int64 `json:"damageMeter"`
 }
 
 // SpecEntry is one Destiny Board node + mastery level, for the specs upload.
@@ -64,6 +67,9 @@ type Syncer struct {
 
 	sessions *SessionManager // tags uploads with the active sessionId (may be nil)
 
+	clientVersion string                  // sent as X-Client-Version (empty = omitted)
+	onAwakened    func([]ResolvedAwakened) // backend-computed trait values callback
+
 	awMu    sync.Mutex
 	awTimer *time.Timer // debounce for event-driven awakened sync
 
@@ -75,6 +81,26 @@ type Syncer struct {
 // SetSessions attaches the session manager so uploads can carry their sessionId.
 func (s *Syncer) SetSessions(sm *SessionManager) { s.sessions = sm }
 
+// SetClientVersion sets the value sent as the X-Client-Version header on uploads.
+func (s *Syncer) SetClientVersion(v string) { s.clientVersion = v }
+
+// SetOnAwakened registers the callback that receives backend-computed awakened
+// trait values parsed from the /user/awakened/sync response.
+func (s *Syncer) SetOnAwakened(fn func([]ResolvedAwakened)) { s.onAwakened = fn }
+
+// ResolvedAwakened is one item's backend-computed trait values, matched by soulId.
+type ResolvedAwakened struct {
+	SoulID string                  `json:"soulId"`
+	Traits []ResolvedAwakenedTrait `json:"traits"`
+}
+
+// ResolvedAwakenedTrait is a single backend-computed trait value.
+type ResolvedAwakenedTrait struct {
+	ID      string  `json:"id"`
+	Value   float64 `json:"value"`
+	Percent bool    `json:"percent"`
+}
+
 // New builds a Syncer. baseURL is the account API origin; token returns the
 // bearer JWT + user id (ok=false when logged out); enabled reports per-type consent.
 func New(baseURL string, st *store.Store, token func() (string, string, bool), enabled func(kind string) bool, snaps Snapshots, logf func(string)) *Syncer {
@@ -82,7 +108,7 @@ func New(baseURL string, st *store.Store, token func() (string, string, bool), e
 		logf = func(string) {}
 	}
 	counters := map[string]*atomic.Int64{}
-	for _, k := range []string{"trades", "mails", "gathering", "dungeon", "loot", "party", "specs", "awakened"} {
+	for _, k := range []string{"trades", "mails", "gathering", "dungeon", "loot", "party", "specs", "awakened", "damage-meter"} {
 		counters[k] = &atomic.Int64{}
 	}
 	return &Syncer{
@@ -106,9 +132,10 @@ func (s *Syncer) Stats() Stats {
 		Gathering: s.counters["gathering"].Load(),
 		Dungeon:   s.counters["dungeon"].Load(),
 		Loot:      s.counters["loot"].Load(),
-		Party:     s.counters["party"].Load(),
-		Specs:     s.counters["specs"].Load(),
-		Awakened:  s.counters["awakened"].Load(),
+		Party:       s.counters["party"].Load(),
+		Specs:       s.counters["specs"].Load(),
+		Awakened:    s.counters["awakened"].Load(),
+		DamageMeter: s.counters["damage-meter"].Load(),
 	}
 }
 
@@ -140,6 +167,74 @@ func (s *Syncer) Start() {
 			}
 		}
 	}()
+	// damage meter: push the party's cumulative group totals every 5s while a
+	// dungeon session is active, so the website can graph the run.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.syncDamage(ctx)
+			}
+		}
+	}()
+}
+
+// syncDamage posts the current group damage summary to /user/damage-meter (every
+// call, no change-dedup — the site upserts by sessionId to build a time series).
+// Runs only while a dungeon session is active and consent is on; skips until at
+// least one participant exists.
+func (s *Syncer) syncDamage(ctx context.Context) {
+	if s.snaps.Combat == nil || !s.on("damage") {
+		return
+	}
+	jwt, _, ok := s.token()
+	if !ok {
+		return
+	}
+	body, err := json.Marshal(s.snaps.Combat())
+	if err != nil {
+		return
+	}
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil || m == nil {
+		return
+	}
+	if parts, ok := m["participants"].([]any); !ok || len(parts) == 0 {
+		return // nothing to graph yet
+	}
+	if s.snaps.ServerID != nil {
+		m["serverId"] = s.snaps.ServerID()
+	}
+	if s.snaps.PlayerName != nil {
+		m["playerName"] = s.snaps.PlayerName()
+	}
+	// damage rides whichever combat session is active: dungeon (PvE) or pvp.
+	kind := "dungeon"
+	if s.sessions != nil {
+		if id := s.sessions.CurrentID("dungeon"); id != 0 {
+			m["sessionId"] = id
+		} else if id := s.sessions.CurrentID("pvp"); id != 0 {
+			m["sessionId"] = id
+			kind = "pvp"
+		}
+	}
+	m["sessionKind"] = kind // "dungeon" or "pvp"
+	merged, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	if s.postRaw(ctx, jwt, "/user/damage-meter", merged) {
+		s.counters["damage-meter"].Add(1)
+		if s.sessions != nil {
+			s.sessions.MarkActivity(kind)
+		}
+	}
 }
 
 // Stop halts the sync loop.
@@ -169,15 +264,16 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 		}
 	}
 	if s.on("loot") {
-		s.syncSnapshot(ctx, jwt, "loot", s.snaps.Loot)
+		s.syncSnapshot(ctx, jwt, "loot", "dungeon", s.snaps.Loot) // loot rides the dungeon session
 	}
 	if s.on("party") {
-		s.syncSnapshot(ctx, jwt, "party", s.snaps.Party)
+		s.syncSnapshot(ctx, jwt, "party", "party", s.snaps.Party)
 	}
 	if s.on("gathering") {
-		s.syncSnapshot(ctx, jwt, "gathering", s.snaps.Gathering)
+		s.syncSnapshot(ctx, jwt, "gathering", "gathering", s.snaps.Gathering)
 	}
-	// awakened is event-driven (see TriggerAwakened), not on this loop.
+	// damage-meter has its own faster loop (see damageLoop); awakened is
+	// event-driven (see TriggerAwakened). Neither runs on this 60s loop.
 }
 
 // TriggerAwakened schedules an awakened sync ~2s after the latest inventory
@@ -229,11 +325,23 @@ func (s *Syncer) syncAwakened(ctx context.Context, jwt string) {
 	if same {
 		return
 	}
-	if s.postRaw(ctx, jwt, "/user/awakened/sync", body) {
-		s.mu.Lock()
-		s.lastSig["awakened"] = sig
-		s.mu.Unlock()
-		s.counters["awakened"].Add(1)
+	resp, ok := s.postRawResp(ctx, jwt, "/user/awakened/sync", body)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	s.lastSig["awakened"] = sig
+	s.mu.Unlock()
+	s.counters["awakened"].Add(1)
+	// The backend echoes computed trait values keyed by soulId — apply them so the
+	// UI can paint real numbers over its skeletons.
+	if s.onAwakened != nil && len(resp) > 0 {
+		var r struct {
+			Items []ResolvedAwakened `json:"items"`
+		}
+		if json.Unmarshal(resp, &r) == nil && len(r.Items) > 0 {
+			s.onAwakened(r.Items)
+		}
 	}
 }
 
@@ -389,8 +497,10 @@ func (s *Syncer) UploadSpecs(serverID int, playerName, version string, entries [
 }
 
 // syncSnapshot uploads an in-memory tracker snapshot, but only when it changed
-// since the last upload (avoids a per-tick firehose).
-func (s *Syncer) syncSnapshot(ctx context.Context, jwt, name string, fn func() any) {
+// since the last upload (avoids a per-tick firehose). name is the endpoint path;
+// sessionKind is the session whose id tags the upload (usually the same, but loot
+// uses the "dungeon" session while posting to /user/loot).
+func (s *Syncer) syncSnapshot(ctx context.Context, jwt, name, sessionKind string, fn func() any) {
 	if fn == nil {
 		return
 	}
@@ -402,7 +512,7 @@ func (s *Syncer) syncSnapshot(ctx context.Context, jwt, name string, fn func() a
 	// merge serverId, in-game character, and sessionId into the body for attribution.
 	var sessionID int64
 	if s.sessions != nil {
-		sessionID = s.sessions.CurrentID(name)
+		sessionID = s.sessions.CurrentID(sessionKind)
 	}
 	if s.snaps.ServerID != nil || s.snaps.PlayerName != nil || sessionID != 0 {
 		var m map[string]any
@@ -436,7 +546,7 @@ func (s *Syncer) syncSnapshot(ctx context.Context, jwt, name string, fn func() a
 			c.Add(1)
 		}
 		if s.sessions != nil {
-			s.sessions.MarkActivity(name)
+			s.sessions.MarkActivity(sessionKind)
 		}
 	}
 }
@@ -450,26 +560,36 @@ func (s *Syncer) post(ctx context.Context, jwt, path string, payload any) bool {
 }
 
 func (s *Syncer) postRaw(ctx context.Context, jwt, path string, body []byte) bool {
+	_, ok := s.postRawResp(ctx, jwt, path, body)
+	return ok
+}
+
+// postRawResp posts and returns the response body on 2xx (nil, false otherwise).
+func (s *Syncer) postRawResp(ctx context.Context, jwt, path string, body []byte) ([]byte, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return false
+		return nil, false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("User-Agent", "AlbionMarketDataClient")
+	if s.clientVersion != "" {
+		req.Header.Set("X-Client-Version", s.clientVersion)
+	}
 	if _, userID, ok := s.token(); ok && userID != "" {
 		req.Header.Set("X-User-Id", userID)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.logf(fmt.Sprintf("User sync %s -> %d", path, resp.StatusCode))
-		return false
+		return nil, false
 	}
-	return true
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return respBody, true
 }
 
 func hashBytes(b []byte) string {

@@ -31,6 +31,11 @@ func ev(code photon.EventCode, params map[byte]any) []byte {
 	return phototest.EventPacket(1, params)
 }
 
+func req(code photon.OperationCode, params map[byte]any) []byte {
+	params[253] = int16(code)
+	return phototest.RequestPacket(byte(code), params)
+}
+
 func TestPartyTracker(t *testing.T) {
 	p := NewParty()
 	parser := newPipe(p.Register)
@@ -72,7 +77,7 @@ func TestGatheringTracker(t *testing.T) {
 }
 
 func TestCombatTracker(t *testing.T) {
-	c := NewCombat(nil)
+	c := NewCombat(nil, nil, nil)
 	parser := newPipe(c.Register)
 	parser.ReceivePacket(ev(photon.EvNewCharacter, map[byte]any{0: int64(50), 1: "Me", 7: "me-guid"}))
 	parser.ReceivePacket(ev(photon.EvNewMob, map[byte]any{0: int64(900), 1: int32(7)}))
@@ -96,7 +101,7 @@ func TestDungeonEventPairing(t *testing.T) {
 	dungeonPairWindow = 60 * time.Millisecond
 	defer func() { dungeonPairWindow = old }()
 
-	c := NewCombat(nil)
+	c := NewCombat(nil, nil, nil)
 	parser := newPipe(c.Register)
 
 	var mu sync.Mutex
@@ -123,7 +128,7 @@ func TestDungeonEventPairing(t *testing.T) {
 }
 
 func TestLootTracker(t *testing.T) {
-	l := NewLoot(fakeItems{})
+	l := NewLoot(fakeItems{}, func() string { return "Me" }, func() string { return "Ostyr" })
 	parser := newPipe(l.Register)
 	parser.ReceivePacket(ev(photon.EvOtherGrabbedLoot, map[byte]any{
 		1: "Mob", 2: "Alice", 3: false, 4: int32(20), 5: int64(4),
@@ -138,5 +143,58 @@ func TestLootTracker(t *testing.T) {
 	}
 	if snap.Records[0].Player != "Alice" || snap.Records[0].Amount != 4 || snap.Records[0].Value != 4*2000 {
 		t.Fatalf("loot record wrong: %+v", snap.Records[0])
+	}
+}
+
+func TestLootTrackerPartyRemoved(t *testing.T) {
+	l := NewLoot(fakeItems{}, func() string { return "Me" }, func() string { return "Ostyr" })
+	parser := newPipe(l.Register)
+	// the other party member took item type 1954 from a shared chest
+	// (PartyLootItemTypesRemoved: [1]=item types [3]=isSilver flags, omitted here)
+	parser.ReceivePacket(ev(photon.EvPartyLootItemTypesRemoved, map[byte]any{
+		1: []int32{1954},
+	}))
+	recs := l.Snapshot().Records
+	if len(recs) != 1 {
+		t.Fatalf("party-removed records: %d", len(recs))
+	}
+	if r := recs[0]; r.Player != "Ostyr" || r.ItemID != "ITEM_1954" || r.Source != "Loot chest (party)" {
+		t.Fatalf("party-removed record wrong: %+v", r)
+	}
+}
+
+func TestLootTrackerSelfPickup(t *testing.T) {
+	l := NewLoot(fakeItems{}, func() string { return "Me" }, func() string { return "Ostyr" })
+	parser := newPipe(l.Register)
+	const bag, item = int64(210), int64(660)
+	// the chest's item is discovered (type 20, amount 3, quality 2)
+	parser.ReceivePacket(ev(photon.EvNewSimpleItem, map[byte]any{0: item, 1: int32(20), 2: int64(3), 6: int32(2)}))
+	// open the public loot chest (no privateContainerId at [2]) → links its items
+	parser.ReceivePacket(ev(photon.EvLootChestOpened, map[byte]any{0: bag}))
+	parser.ReceivePacket(ev(photon.EvAttachItemContainer, map[byte]any{0: bag, 1: "chest-guid", 3: []int64{item, 0}}))
+
+	// a container item leaving WITHOUT you moving it (e.g. another player) → ignored
+	parser.ReceivePacket(ev(photon.EvInventoryDeleteItem, map[byte]any{0: item}))
+	if n := len(l.Snapshot().Records); n != 0 {
+		t.Fatalf("recorded a pickup with no self-move: %d", n)
+	}
+
+	// you move it out of the chest into your inventory → arms; it stacked, so it's
+	// deleted from the chest under its original objectId
+	parser.ReceivePacket(req(photon.OpInventoryMoveItem, map[byte]any{1: "chest-guid", 4: "inv-guid"}))
+	parser.ReceivePacket(ev(photon.EvInventoryDeleteItem, map[byte]any{0: item}))
+
+	snap := l.Snapshot()
+	if len(snap.Records) != 1 {
+		t.Fatalf("self-loot records: %d", len(snap.Records))
+	}
+	r := snap.Records[0]
+	if r.Player != "Me" || r.ItemID != "ITEM_20" || r.Quality != 2 || r.Amount != 3 || r.Value != 20*100*3 || r.Source != "Loot chest" {
+		t.Fatalf("self-loot record wrong: %+v", r)
+	}
+	// taking it again must not double-count (deduped on removal)
+	parser.ReceivePacket(ev(photon.EvInventoryDeleteItem, map[byte]any{0: item}))
+	if len(l.Snapshot().Records) != 1 {
+		t.Fatalf("self-loot double-counted")
 	}
 }

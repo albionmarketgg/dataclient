@@ -89,10 +89,12 @@ func (a *App) initUserSync() {
 			// session data: consent AND the kind's session is running
 			case "gathering":
 				return a.cfg.UploadGathering && a.sessionActive("gathering")
+			// dungeon (fame/silver events) rides the dungeon session
 			case "dungeon":
 				return a.cfg.UploadCombat && a.sessionActive("dungeon")
+			// loot rides the dungeon session now (no separate loot session)
 			case "loot":
-				return a.cfg.UploadLoot && a.sessionActive("loot")
+				return a.cfg.UploadLoot && a.sessionActive("dungeon")
 			// party rides alongside any active session (used to group combat/loot)
 			case "party":
 				return a.cfg.UploadParty && a.anySessionActive()
@@ -102,6 +104,9 @@ func (a *App) initUserSync() {
 			// awakened weapons: login + consent only
 			case "awakened":
 				return a.cfg.UploadAwakened
+			// damage meter: rides EITHER the dungeon or the pvp session + its consent
+			case "damage":
+				return a.cfg.UploadCombat && (a.sessionActive("dungeon") || a.sessionActive("pvp"))
 			}
 			return false
 		},
@@ -119,7 +124,10 @@ func (a *App) initUserSync() {
 				}
 				return map[string]any{"roster": roster}
 			},
-			Awakened:   func() any { return a.eng.Awakened.SyncBody() },
+			Awakened: func() any { return a.eng.Awakened.SyncBody() },
+			// damage upload = the party's cumulative group totals (players only),
+			// pushed every few seconds so the site can graph the session.
+			Combat:     func() any { return a.eng.Combat.SessionSummary() },
 			ServerID:   func() int { return a.eng.State.Snapshot().ServerID },
 			PlayerName: func() string { return a.eng.State.Snapshot().PlayerName },
 		},
@@ -134,6 +142,20 @@ func (a *App) initUserSync() {
 		a.eng.Log,
 	)
 	a.usersync.SetSessions(a.sessions)
+	// stamp uploads with the running client version (for the backend's version gate).
+	a.usersync.SetClientVersion(version)
+	a.sessions.SetClientVersion(version)
+	// the awakened sync response echoes backend-computed trait values — apply them
+	// onto the tracked items so the UI paints real numbers over its skeletons.
+	a.usersync.SetOnAwakened(func(items []usersync.ResolvedAwakened) {
+		for _, it := range items {
+			traits := make([]trackers.ResolvedTrait, 0, len(it.Traits))
+			for _, tr := range it.Traits {
+				traits = append(traits, trackers.ResolvedTrait{ID: tr.ID, Value: tr.Value, Percent: tr.Percent})
+			}
+			a.eng.Awakened.ApplyValues(it.SoulID, traits)
+		}
+	})
 	// dungeon data is event-driven: upload each fame (paired with its nearest
 	// silver) the moment it resolves, not on the snapshot tick.
 	a.eng.Combat.OnDungeonEvent(func(ev trackers.DungeonEvent) {

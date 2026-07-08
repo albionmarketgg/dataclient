@@ -43,6 +43,15 @@ func itemValue(info ItemInfo, id, quality int) int64 {
 	return v
 }
 
+// itemUnique returns an item's canonical unique name (e.g. "T5_MAIN_MACE@2",
+// enchant baked in), or "" when unresolved.
+func itemUnique(info ItemInfo, id int) string {
+	if n, ok := info.UniqueName(id); ok {
+		return n
+	}
+	return ""
+}
+
 // guidKey converts a Photon GUID parameter (CustomData/bytes/string) to a stable
 // string key.
 func guidKey(v any) string {

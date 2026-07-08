@@ -136,6 +136,8 @@ body {
 
 .grid { display: grid; gap: 14px; }
 .cards { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+/* a lone stat card shouldn't stretch to the full window width */
+.cards.single { grid-template-columns: repeat(auto-fit, minmax(180px, 240px)); justify-content: start; }
 .card {
   background: var(--bg-2); border: 1px solid var(--border);
   border-radius: var(--r-md); padding: 16px; box-shadow: var(--shadow);
@@ -243,9 +245,45 @@ tbody tr:hover { background: var(--bg-3); }
 .aw-msg { min-height: 16px; margin: 2px 2px 10px; }
 
 .table-wrap { overflow-x: auto; }
-.aw-log-head { margin-bottom: 12px; font-size: 12px; }
+.aw-log-head { margin-bottom: 12px; padding: 5px 12px 0; font-size: 12px; text-align: center; }
 .aw-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
 .aw-table th { text-align: left; color: var(--text-med); font-weight: 600; padding: 7px 12px; border-bottom: 1px solid var(--border); }
 .aw-table td { padding: 6px 12px; border-bottom: 1px solid var(--border-soft); }
 .aw-name { font-weight: 600; }
 .aw-ico-inline { width: 26px; height: 26px; object-fit: contain; vertical-align: middle; margin-right: 9px; }
+/* loading placeholder while the backend computes a trait value */
+.skeleton { display: inline-block; border-radius: 4px; background: linear-gradient(90deg, var(--border-soft) 25%, var(--border) 37%, var(--border-soft) 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; }
+.aw-skel { width: 46px; height: 10px; vertical-align: middle; }
+@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+/* damage meter */
+.mtr-enc { margin-bottom: 14px; }
+.mtr-enc:last-child { margin-bottom: 0; }
+.mtr-head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border-soft); }
+.mtr-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 12px; }
+.mtr-name { width: 130px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mtr-row.party .mtr-name { color: var(--accent); font-weight: 600; }
+.mtr-bar { flex: 1; position: relative; height: 18px; background: var(--bg-2); border-radius: var(--r-sm); overflow: hidden; }
+.mtr-fill { position: absolute; inset: 0 auto 0 0; background: var(--sell-soft); border-right: 2px solid var(--sell); border-radius: var(--r-sm) 0 0 var(--r-sm); }
+.mtr-row.party .mtr-fill { background: var(--accent-soft); border-right-color: var(--accent); }
+.mtr-dmg { position: absolute; right: 6px; top: 0; line-height: 18px; font-size: 11px; color: var(--text); }
+.mtr-dps { width: 78px; flex: none; text-align: right; color: var(--text-med); }
+.mtr-taken { width: 70px; flex: none; text-align: right; color: var(--sell); }
+.mtr-heal { width: 70px; flex: none; text-align: right; color: var(--good); }
+/* L/R padding so the meter doesn't run edge-to-edge in its panel */
+.mtr-wrap { padding: 10px 14px; }
+.mtr-legend { display: flex; align-items: center; gap: 10px; padding: 2px 0 6px; margin-bottom: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); border-bottom: 1px solid var(--border-soft); }
+.mtr-legend span { color: var(--text-dim); }
+.mtr-bar-l { flex: 1; }
+.mtr-h3 { display: flex; align-items: center; gap: 8px; }
+.mtr-solo { padding: 14px; margin: 0; }
+/* fame chart */
+.fame-wrap { padding: 14px; }
+.fame-stats { display: flex; gap: 32px; margin-bottom: 10px; }
+.fame-stats .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+.fame-stats .value { font-family: var(--font-head); font-size: 24px; font-weight: 600; margin-top: 2px; }
+.fame-stats .value.accent { color: var(--accent); }
+.fame-svg { width: 100%; height: 150px; display: block; }
+.fame-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.fame-area { fill: var(--accent-soft); stroke: none; }

@@ -14,6 +14,7 @@ import (
 	"github.com/niick1231/albionmarket_dataclient/internal/handlers"
 	"github.com/niick1231/albionmarket_dataclient/internal/locations"
 	"github.com/niick1231/albionmarket_dataclient/internal/market"
+	"github.com/niick1231/albionmarket_dataclient/internal/mobs"
 	"github.com/niick1231/albionmarket_dataclient/internal/photon"
 	"github.com/niick1231/albionmarket_dataclient/internal/specs"
 	"github.com/niick1231/albionmarket_dataclient/internal/state"
@@ -49,6 +50,7 @@ type Engine struct {
 	Specs     *handlers.Specs
 
 	specsSvc *specs.Service
+	mobsSvc  *mobs.Service
 
 	feedMu sync.Mutex
 	feed   []handlers.CaptureEvent
@@ -103,8 +105,30 @@ func New(cfg config.Config, itemDB ItemDB, dbPath string) *Engine {
 
 	e.Party = trackers.NewParty()
 	e.Gathering = trackers.NewGathering(info, e.State)
-	e.Combat = trackers.NewCombat(e.Party)
-	e.Loot = trackers.NewLoot(info)
+	e.Combat = trackers.NewCombat(e.Party,
+		func(index int) (string, bool) {
+			if e.mobsSvc != nil {
+				return e.mobsSvc.Name(index)
+			}
+			return "", false
+		},
+		func() (int64, bool) { return e.State.UserObjectID() })
+	e.Loot = trackers.NewLoot(info,
+		func() string { return e.State.Snapshot().PlayerName },
+		func() string { // the single OTHER party member's name (for their chest loot)
+			others := ""
+			n := 0
+			for _, m := range e.Party.Snapshot().Members {
+				if !m.IsLocal && m.Name != "" {
+					others = m.Name
+					n++
+				}
+			}
+			if n == 1 {
+				return others
+			}
+			return ""
+		})
 	e.Awakened = trackers.NewAwakened(info,
 		func() int { return e.State.Snapshot().ServerID },
 		func() string { return e.State.Snapshot().PlayerName },
@@ -129,6 +153,14 @@ func New(cfg config.Config, itemDB ItemDB, dbPath string) *Engine {
 	e.specsSvc = specs.New(cfg.EffectiveAchievementsURL(), cachePath)
 	e.Specs = handlers.NewSpecs(e.specsSvc)
 	e.Specs.Register(e.disp)
+
+	// Mob-name resolver for the damage meter (index -> name). Fetched + cached like
+	// achievements.xml; nil-safe until loaded (mobs show as "Mob <index>").
+	mobsCache := ""
+	if dbPath != "" {
+		mobsCache = filepath.Join(filepath.Dir(dbPath), "mobs.json")
+	}
+	e.mobsSvc = mobs.New(cfg.EffectiveMobsURL(), mobsCache)
 
 	// surface gameplay-tracker activity in the live feed
 	trackerFeed := func(kind, detail string, count int) {
@@ -195,6 +227,9 @@ func (e *Engine) Start() error {
 	e.market.Start()
 	if e.specsSvc != nil {
 		go e.specsSvc.Load()
+	}
+	if e.mobsSvc != nil {
+		go e.mobsSvc.Load()
 	}
 	go e.startListener()
 	return nil
