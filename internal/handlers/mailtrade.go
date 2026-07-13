@@ -9,11 +9,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/dispatch"
-	"github.com/niick1231/albionmarket_dataclient/internal/market"
-	"github.com/niick1231/albionmarket_dataclient/internal/photon"
-	"github.com/niick1231/albionmarket_dataclient/internal/state"
-	"github.com/niick1231/albionmarket_dataclient/internal/store"
+	"github.com/albionmarketgg/data-client/internal/dispatch"
+	"github.com/albionmarketgg/data-client/internal/market"
+	"github.com/albionmarketgg/data-client/internal/photon"
+	"github.com/albionmarketgg/data-client/internal/state"
+	"github.com/albionmarketgg/data-client/internal/store"
 )
 
 // mail types (positional, mirror the marketplace mail summary codes).

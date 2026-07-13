@@ -4,7 +4,7 @@ package dispatch
 import (
 	"sync"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/photon"
+	"github.com/albionmarketgg/data-client/internal/photon"
 )
 
 // EventFunc handles an event's parameter table.

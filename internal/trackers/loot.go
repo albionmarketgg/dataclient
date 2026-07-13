@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/dispatch"
-	"github.com/niick1231/albionmarket_dataclient/internal/photon"
+	"github.com/albionmarketgg/data-client/internal/dispatch"
+	"github.com/albionmarketgg/data-client/internal/photon"
 )
 
 // LootRecord is a single loot pickup.

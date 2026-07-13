@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/store"
+	"github.com/albionmarketgg/data-client/internal/store"
 )
 
 type capture struct {

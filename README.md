@@ -68,7 +68,7 @@ You don't have to take our word for it — the client source is in this reposito
 ## Install
 
 1. Download the latest `AlbionMarketDataClient-Setup.exe` from the
-   [Releases](https://github.com/niick1231/albionmarket_dataclient/releases) page.
+   [Releases](https://github.com/albionmarketgg/data-client/releases) page.
 2. Run it. The installer will offer to install **Npcap** if it isn't already present (required for
    packet capture).
 3. Launch the app and sign in with Discord to enable gameplay syncing.
@@ -92,7 +92,7 @@ wails build                  # dev build → build/bin/
 wails build -platform windows/amd64 -nsis -ldflags "-X main.version=<version>"
 ```
 
-The module path is `github.com/niick1231/albionmarket_dataclient`. The frontend lives in `frontend/`
+The module path is `github.com/albionmarketgg/data-client`. The frontend lives in `frontend/`
 (TypeScript + Vite), the Go pipeline in `internal/`.
 
 ---

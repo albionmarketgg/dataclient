@@ -10,17 +10,17 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/auth"
-	"github.com/niick1231/albionmarket_dataclient/internal/autostart"
-	"github.com/niick1231/albionmarket_dataclient/internal/config"
-	"github.com/niick1231/albionmarket_dataclient/internal/engine"
-	"github.com/niick1231/albionmarket_dataclient/internal/handlers"
-	"github.com/niick1231/albionmarket_dataclient/internal/items"
-	"github.com/niick1231/albionmarket_dataclient/internal/state"
-	"github.com/niick1231/albionmarket_dataclient/internal/store"
-	"github.com/niick1231/albionmarket_dataclient/internal/trackers"
-	"github.com/niick1231/albionmarket_dataclient/internal/update"
-	"github.com/niick1231/albionmarket_dataclient/internal/usersync"
+	"github.com/albionmarketgg/data-client/internal/auth"
+	"github.com/albionmarketgg/data-client/internal/autostart"
+	"github.com/albionmarketgg/data-client/internal/config"
+	"github.com/albionmarketgg/data-client/internal/engine"
+	"github.com/albionmarketgg/data-client/internal/handlers"
+	"github.com/albionmarketgg/data-client/internal/items"
+	"github.com/albionmarketgg/data-client/internal/state"
+	"github.com/albionmarketgg/data-client/internal/store"
+	"github.com/albionmarketgg/data-client/internal/trackers"
+	"github.com/albionmarketgg/data-client/internal/update"
+	"github.com/albionmarketgg/data-client/internal/usersync"
 )
 
 // App is the Wails-bound application backend.

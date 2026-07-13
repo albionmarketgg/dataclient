@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/capture"
-	"github.com/niick1231/albionmarket_dataclient/internal/config"
-	"github.com/niick1231/albionmarket_dataclient/internal/photon"
-	"github.com/niick1231/albionmarket_dataclient/internal/state"
+	"github.com/albionmarketgg/data-client/internal/capture"
+	"github.com/albionmarketgg/data-client/internal/config"
+	"github.com/albionmarketgg/data-client/internal/photon"
+	"github.com/albionmarketgg/data-client/internal/state"
 )
 
 type nopHandler struct{}

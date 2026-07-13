@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/config"
-	"github.com/niick1231/albionmarket_dataclient/internal/state"
-	"github.com/niick1231/albionmarket_dataclient/internal/upload"
+	"github.com/albionmarketgg/data-client/internal/config"
+	"github.com/albionmarketgg/data-client/internal/state"
+	"github.com/albionmarketgg/data-client/internal/upload"
 )
 
 type fakeNamer struct{}

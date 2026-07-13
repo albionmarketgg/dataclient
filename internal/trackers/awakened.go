@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/niick1231/albionmarket_dataclient/internal/dispatch"
-	"github.com/niick1231/albionmarket_dataclient/internal/photon"
+	"github.com/albionmarketgg/data-client/internal/dispatch"
+	"github.com/albionmarketgg/data-client/internal/photon"
 )
 
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
