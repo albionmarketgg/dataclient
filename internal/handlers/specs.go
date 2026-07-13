@@ -3,8 +3,8 @@ package handlers
 import (
 	"sort"
 
-	"github.com/albionmarketgg/data-client/internal/dispatch"
-	"github.com/albionmarketgg/data-client/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/dispatch"
+	"github.com/albionmarketgg/dataclient/internal/photon"
 )
 
 // SpecResolver maps a Destiny Board achievement index to its stable string id.

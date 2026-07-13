@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/config"
-	"github.com/albionmarketgg/data-client/internal/demo"
-	"github.com/albionmarketgg/data-client/internal/engine"
+	"github.com/albionmarketgg/dataclient/internal/config"
+	"github.com/albionmarketgg/dataclient/internal/demo"
+	"github.com/albionmarketgg/dataclient/internal/engine"
 )
 
 func main() {

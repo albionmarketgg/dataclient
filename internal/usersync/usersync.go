@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/store"
+	"github.com/albionmarketgg/dataclient/internal/store"
 )
 
 // Snapshots provides current in-memory tracker state as JSON-marshalable values.

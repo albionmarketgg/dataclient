@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/dispatch"
-	"github.com/albionmarketgg/data-client/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/dispatch"
+	"github.com/albionmarketgg/dataclient/internal/photon"
 )
 
 // LocalPlayer exposes the local player's object id (satisfied by state.State).

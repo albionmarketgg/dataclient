@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/pow"
+	"github.com/albionmarketgg/dataclient/internal/pow"
 )
 
 type collector struct {

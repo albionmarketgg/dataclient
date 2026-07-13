@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/config"
+	"github.com/albionmarketgg/dataclient/internal/config"
 )
 
 // Character is a detected in-game character (from the Join packet).

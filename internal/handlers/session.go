@@ -4,10 +4,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/dispatch"
-	"github.com/albionmarketgg/data-client/internal/locations"
-	"github.com/albionmarketgg/data-client/internal/photon"
-	"github.com/albionmarketgg/data-client/internal/state"
+	"github.com/albionmarketgg/dataclient/internal/dispatch"
+	"github.com/albionmarketgg/dataclient/internal/locations"
+	"github.com/albionmarketgg/dataclient/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/state"
 )
 
 // Session handles the Join response, establishing the local player's object id,

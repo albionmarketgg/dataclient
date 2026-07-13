@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/dispatch"
-	"github.com/albionmarketgg/data-client/internal/photon"
-	"github.com/albionmarketgg/data-client/internal/phototest"
+	"github.com/albionmarketgg/dataclient/internal/dispatch"
+	"github.com/albionmarketgg/dataclient/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/phototest"
 )
 
 type fakeItems struct{}

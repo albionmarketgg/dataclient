@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/dispatch"
-	"github.com/albionmarketgg/data-client/internal/market"
-	"github.com/albionmarketgg/data-client/internal/photon"
-	"github.com/albionmarketgg/data-client/internal/state"
-	"github.com/albionmarketgg/data-client/internal/upload"
+	"github.com/albionmarketgg/dataclient/internal/dispatch"
+	"github.com/albionmarketgg/dataclient/internal/market"
+	"github.com/albionmarketgg/dataclient/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/state"
+	"github.com/albionmarketgg/dataclient/internal/upload"
 )
 
 // ItemNamer resolves an item's unique name from its numeric id.

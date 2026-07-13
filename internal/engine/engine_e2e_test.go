@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/config"
-	"github.com/albionmarketgg/data-client/internal/photon"
-	"github.com/albionmarketgg/data-client/internal/phototest"
-	"github.com/albionmarketgg/data-client/internal/pow"
-	"github.com/albionmarketgg/data-client/internal/state"
+	"github.com/albionmarketgg/dataclient/internal/config"
+	"github.com/albionmarketgg/dataclient/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/phototest"
+	"github.com/albionmarketgg/dataclient/internal/pow"
+	"github.com/albionmarketgg/dataclient/internal/state"
 )
 
 // mockIngest is an in-test ingest server with the PoW handshake.

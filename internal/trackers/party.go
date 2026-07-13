@@ -4,8 +4,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/albionmarketgg/data-client/internal/dispatch"
-	"github.com/albionmarketgg/data-client/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/dispatch"
+	"github.com/albionmarketgg/dataclient/internal/photon"
 )
 
 // PartyMember is one party member in a snapshot.

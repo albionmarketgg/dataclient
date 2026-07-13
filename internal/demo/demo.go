@@ -7,11 +7,11 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/config"
-	"github.com/albionmarketgg/data-client/internal/engine"
-	"github.com/albionmarketgg/data-client/internal/photon"
-	"github.com/albionmarketgg/data-client/internal/phototest"
-	"github.com/albionmarketgg/data-client/internal/state"
+	"github.com/albionmarketgg/dataclient/internal/config"
+	"github.com/albionmarketgg/dataclient/internal/engine"
+	"github.com/albionmarketgg/dataclient/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/phototest"
+	"github.com/albionmarketgg/dataclient/internal/state"
 )
 
 var items = []string{"T4_BAG", "T5_2H_BOW", "T6_HEAD_CLOTH_SET1", "T4_MOUNT_HORSE", "T7_OFF_SHIELD", "T8_MAIN_SWORD"}

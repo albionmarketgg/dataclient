@@ -10,9 +10,9 @@ import (
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcap"
 
-	"github.com/albionmarketgg/data-client/internal/config"
-	"github.com/albionmarketgg/data-client/internal/photon"
-	"github.com/albionmarketgg/data-client/internal/state"
+	"github.com/albionmarketgg/dataclient/internal/config"
+	"github.com/albionmarketgg/dataclient/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/state"
 )
 
 // Listener captures packets across all devices and dispatches Photon payloads.

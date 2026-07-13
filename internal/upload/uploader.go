@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/config"
-	"github.com/albionmarketgg/data-client/internal/market"
-	"github.com/albionmarketgg/data-client/internal/pow"
+	"github.com/albionmarketgg/dataclient/internal/config"
+	"github.com/albionmarketgg/dataclient/internal/market"
+	"github.com/albionmarketgg/dataclient/internal/pow"
 )
 
 // Stats is an upload counter snapshot for the UI.

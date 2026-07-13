@@ -1,4 +1,4 @@
-module github.com/albionmarketgg/data-client
+module github.com/albionmarketgg/dataclient
 
 go 1.26.4
 

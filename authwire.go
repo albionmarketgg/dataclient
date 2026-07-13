@@ -5,11 +5,11 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"github.com/albionmarketgg/data-client/internal/auth"
-	"github.com/albionmarketgg/data-client/internal/handlers"
-	"github.com/albionmarketgg/data-client/internal/store"
-	"github.com/albionmarketgg/data-client/internal/trackers"
-	"github.com/albionmarketgg/data-client/internal/usersync"
+	"github.com/albionmarketgg/dataclient/internal/auth"
+	"github.com/albionmarketgg/dataclient/internal/handlers"
+	"github.com/albionmarketgg/dataclient/internal/store"
+	"github.com/albionmarketgg/dataclient/internal/trackers"
+	"github.com/albionmarketgg/dataclient/internal/usersync"
 )
 
 // authStore adapts *store.Store to auth.RefreshStore.

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/albionmarketgg/data-client/internal/dispatch"
-	"github.com/albionmarketgg/data-client/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/dispatch"
+	"github.com/albionmarketgg/dataclient/internal/photon"
 )
 
 // CombatParticipant is one player's contribution within an encounter (mobs are
