@@ -49,8 +49,10 @@ You don't have to take our word for it — the client source is in this reposito
 - Note: combat/loot/party data can include other players' **in-game character names** (party members,
   nearby looters) — this is public in-game information.
 
-A full **privacy & data-collection policy** is published on the website:
-**[albionmarket.gg](https://albionmarket.gg)**.
+- **[Privacy Policy](https://albionmarket.gg/privacy-policy-client)** — what's collected, stored, and
+  uploaded, and your rights.
+- **[Terms of Use](https://albionmarket.gg/terms-of-use-client)** — including that the app doesn't
+  modify or automate the game, and is used at your own risk.
 
 ## Security
 
@@ -105,13 +107,10 @@ overridden in the local config file for self-hosting.
 
 ## Credits & acknowledgements
 
-- The **Photon protocol parsing**, event/operation code tables, and the proof-of-work upload handshake
-  derive from the wider **[Albion Online Data Project](https://www.albion-online-data.com)** ecosystem
-  and the **AlbionDataAvalonia** project. Thanks to those projects and their contributors.
+Built with these open-source components:
 - **[Npcap](https://npcap.com)** (the Nmap Project) — packet capture.
-- **[Wails](https://wails.io)** — the Go + web desktop framework.
+- **[Wails](https://wails.io)** — Go + web desktop framework.
 - **[gopacket](https://github.com/gopacket/gopacket)** — packet decoding.
-- Game reference data from the community **`ao-bin-dumps`**.
 
 Albion Online is a trademark of Sandbox Interactive GmbH. This project is a fan-made tool and is not
 affiliated with or endorsed by Sandbox Interactive.
@@ -120,4 +119,6 @@ affiliated with or endorsed by Sandbox Interactive.
 
 ## License
 
-License to be finalized before public release — see `LICENSE`.
+**Source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You're free to read,
+build, run, and modify it for **non-commercial** purposes — but **commercial use, reselling, or running
+it as a paid service is not permitted**. See [LICENSE.md](LICENSE.md) for the full terms.

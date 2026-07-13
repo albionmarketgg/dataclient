@@ -1,6 +1,3 @@
-# Reference upstream (third-party, not part of this repo)
-/ref-AlbionDataAvalonia/
-
 # Build output
 /build/bin/
 *.exe
@@ -23,5 +20,6 @@
 inspector-capture.jsonl
 frontend/package.json.md5
 
-# local-only docs (moved out of the repo)
+# local-only / internal docs (not part of the public repo)
 local-docs/
+docs/
