@@ -251,10 +251,26 @@ func (c *Combat) onHealthBatch(m map[byte]any) {
 	c.fire()
 }
 
+// fameIsPremium reports whether the UpdateFame premium-bonus flag (param 5) is
+// set. Real packets carry a bool; be tolerant of a numeric 0/1 too.
+func fameIsPremium(v any) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return i64(v) != 0
+}
+
 func (c *Combat) onFame(m map[byte]any) {
-	// Gained fame = zone-multiplied fame (param 2) + satchel bonus (param 10);
-	// both fixed-point /10000, matching the in-game number.
-	raw := i64(m[2]) + i64(m[10])
+	// Gained fame = zone-multiplied fame (param 2) + the +50% Premium bonus when
+	// active (param 5) + satchel bonus (param 10); all fixed-point /10000, matching
+	// the in-game number. Premium was previously omitted, which undercounted fame
+	// for premium players.
+	base := i64(m[2])
+	premium := int64(0)
+	if base > 0 && fameIsPremium(m[5]) {
+		premium = base / 2 // Premium grants +50% on the zone-multiplied fame
+	}
+	raw := base + premium + i64(m[10])
 	fame := raw / 10000
 	if fame <= 0 {
 		return

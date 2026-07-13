@@ -127,6 +127,35 @@ func TestDungeonEventPairing(t *testing.T) {
 	}
 }
 
+func TestFamePremiumBonus(t *testing.T) {
+	old := dungeonPairWindow
+	dungeonPairWindow = 60 * time.Millisecond
+	defer func() { dungeonPairWindow = old }()
+
+	c := NewCombat(nil, nil, nil)
+	parser := newPipe(c.Register)
+
+	var mu sync.Mutex
+	var events []DungeonEvent
+	c.OnDungeonEvent(func(e DungeonEvent) { mu.Lock(); events = append(events, e); mu.Unlock() })
+
+	// premium active (param 5 = true): 100 base fame (param 2) -> +50% = 150,
+	// paired with a nearby silver drop.
+	parser.ReceivePacket(ev(photon.EvUpdateFame, map[byte]any{2: int64(1000000), 5: true, 10: int64(0)}))
+	time.Sleep(15 * time.Millisecond)
+	parser.ReceivePacket(ev(photon.EvTakeSilver, map[byte]any{3: int64(12000000)}))
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 1 {
+		t.Fatalf("want 1 dungeon event, got %d", len(events))
+	}
+	if events[0].Fame != 150 {
+		t.Fatalf("premium fame: got %d want 150 (base 100 + 50%%)", events[0].Fame)
+	}
+}
+
 func TestLootTracker(t *testing.T) {
 	l := NewLoot(fakeItems{}, func() string { return "Me" }, func() string { return "Ostyr" })
 	parser := newPipe(l.Register)
