@@ -1,6 +1,8 @@
 # Build output
 /build/bin/
 *.exe
+# ...except the redistributable installers we bundle (WinPcap + WebView2)
+!build/windows/thirdparty/*.exe
 
 # Go
 /vendor/
