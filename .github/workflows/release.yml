@@ -1,14 +1,14 @@
-# Builds the Windows installer and publishes a GitHub Release.
+# Builds the Windows installer (Inno Setup) and publishes a GitHub Release.
 #
-# Distribution model A (chosen): the website's /download/data-client points at
+# Distribution model A: the website's download link points at
 #   https://github.com/<owner>/<repo>/releases/latest/download/AlbionMarketDataClient-Setup.exe
 # That URL matches by EXACT filename, so every release uploads a stable-named
 # asset (AlbionMarketDataClient-Setup.exe) plus a versioned copy. The version
 # lives in the tag/release title, not the stable filename.
 #
-# Requirements for the download link to work: the repo + its releases must be
-# PUBLIC (the latest-release URL is unauthenticated). If the repo must stay
-# private, host the binary on our own server instead (see CLIENT_AGENT_TODO.md §4).
+# The installer (build/windows/installer/albionmarket.iss) bundles WinPcap 4.1.3
+# and the Microsoft-signed WebView2 bootstrapper (build/windows/thirdparty), so it
+# downloads/executes nothing from the internet at install time.
 #
 # Trigger: push a tag like v1.2.3, or run manually (workflow_dispatch).
 
@@ -29,6 +29,7 @@ permissions:
 env:
   NPCAP_SDK_URL: https://npcap.com/dist/npcap-sdk-1.13.zip
   STABLE_ASSET: AlbionMarketDataClient-Setup.exe
+  ISCC: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
 
 jobs:
   build-windows:
@@ -50,28 +51,25 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.26"
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install build tools (mingw gcc + NSIS)
+      - name: Install build tools (mingw gcc + Inno Setup)
         shell: pwsh
         run: |
-          choco install -y --no-progress mingw nsis
-          # NSIS isn't shimmed onto PATH by choco; add it so `wails build -nsis`
-          # finds makensis (otherwise wails silently skips the installer).
-          "C:\Program Files (x86)\NSIS" | Out-File $env:GITHUB_PATH -Append
-          "C:\Program Files\NSIS"       | Out-File $env:GITHUB_PATH -Append
+          choco install -y --no-progress mingw innosetup
 
       - name: Verify toolchain
         shell: pwsh
         run: |
           gcc --version
-          & "C:\Program Files (x86)\NSIS\makensis.exe" /VERSION
+          if (-not (Test-Path "$env:ISCC")) { throw "ISCC not found at $env:ISCC" }
+          Write-Host "Inno Setup present: $env:ISCC"
 
-      - name: Install Npcap SDK
+      - name: Install Npcap SDK (build-time cgo dependency)
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "$env:NPCAP_SDK_URL" -OutFile npcap-sdk.zip
@@ -86,23 +84,27 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
           "$env:USERPROFILE\go\bin" | Out-File $env:GITHUB_PATH -Append
 
-      - name: Build installer
+      - name: Build app (no bundled installer; Inno does that next)
         shell: pwsh
         run: |
-          wails build -platform windows/amd64 -nsis -ldflags "-X main.version=${{ steps.ver.outputs.version }}"
+          wails build -platform windows/amd64 -ldflags "-X main.version=${{ steps.ver.outputs.version }}"
+
+      - name: Compile installer (Inno Setup, bundles WinPcap + WebView2)
+        shell: pwsh
+        run: |
+          & "$env:ISCC" /DMyAppVersion=${{ steps.ver.outputs.version }} build\windows\installer\albionmarket.iss
+          if (-not (Test-Path "build\bin\AlbionMarketDataClient-Setup.exe")) { throw "installer not produced" }
 
       - name: Stage release assets (stable + versioned names)
         shell: pwsh
         run: |
-          $installer = Get-ChildItem build\bin\*installer*.exe | Select-Object -First 1
-          if (-not $installer) { throw "installer not found in build\bin" }
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item $installer.FullName "dist\$env:STABLE_ASSET"
-          Copy-Item $installer.FullName "dist\AlbionMarketDataClient-${{ steps.ver.outputs.version }}-Setup.exe"
+          Copy-Item "build\bin\AlbionMarketDataClient-Setup.exe" "dist\$env:STABLE_ASSET"
+          Copy-Item "build\bin\AlbionMarketDataClient-Setup.exe" "dist\AlbionMarketDataClient-${{ steps.ver.outputs.version }}-Setup.exe"
           Get-ChildItem dist
 
-      # NOTE: unsigned installers trigger SmartScreen "unknown publisher" warnings.
-      # To sign, add a code-signing step here before the release (see docs/PACKAGING_AND_SIGNING.md).
+      # NOTE: unsigned installers can still trigger SmartScreen "unknown publisher"
+      # warnings. To sign, add a signing step here before the release.
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
