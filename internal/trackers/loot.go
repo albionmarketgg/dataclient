@@ -146,10 +146,7 @@ func (l *Loot) onNewItem(m map[byte]any) {
 	if amount <= 0 {
 		amount = 1
 	}
-	quality := 1
-	if q := iN(m[6]); q > 0 {
-		quality = q
-	}
+	quality := dispatch.ItemQuality(m) // layout-tolerant ([6], or [7] post-2026-07 patch)
 	l.mu.Lock()
 	if len(l.discovered) > 8192 {
 		l.discovered = map[int64]lootItemInfo{}

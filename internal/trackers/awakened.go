@@ -86,6 +86,18 @@ type AwakenedSnapshot struct {
 	Items []AwakenedItem `json:"items"`
 }
 
+// equipInfo is the static item info carried by a NewEquipmentItem packet, cached
+// by objectId until (and after) the item's legendary-soul packet materializes it.
+type equipInfo struct {
+	itemID  string
+	name    string
+	quality int
+}
+
+// equipCacheMax bounds the equipment-info cache (every equipment packet lands
+// here, including other players' gear; oldest entries are evicted FIFO).
+const equipCacheMax = 512
+
 // Awakened tracks awakened items from equipment + legendary-soul packets.
 type Awakened struct {
 	info       ItemInfo
@@ -93,10 +105,12 @@ type Awakened struct {
 	playerName func() string
 	location   func() string // current mapped location name ("" if unmapped)
 
-	mu       sync.Mutex
-	items    map[string]*AwakenedItem // keyed by objectId (string)
-	seq      int64                    // monotonic update counter (stamps AwakenedItem.updated)
-	onChange func()
+	mu         sync.Mutex
+	items      map[string]*AwakenedItem // keyed by objectId (string)
+	equipCache map[int64]equipInfo      // objectId -> static info from NewEquipmentItem
+	equipOrder []int64                  // FIFO eviction order for equipCache
+	seq        int64                    // monotonic update counter (stamps AwakenedItem.updated)
+	onChange   func()
 }
 
 // NewAwakened creates the tracker. info resolves item names; serverID/playerName/
@@ -106,7 +120,8 @@ func NewAwakened(info ItemInfo, serverID func() int, playerName func() string, l
 	if info == nil {
 		info = nopItems{}
 	}
-	return &Awakened{info: info, serverID: serverID, playerName: playerName, location: location, items: map[string]*AwakenedItem{}}
+	return &Awakened{info: info, serverID: serverID, playerName: playerName, location: location,
+		items: map[string]*AwakenedItem{}, equipCache: map[int64]equipInfo{}}
 }
 
 // curLocation returns the current mapped location name (empty when unmapped).
@@ -139,28 +154,60 @@ func (a *Awakened) at(obj int64) *AwakenedItem {
 	return it
 }
 
-// onEquipment handles NewEquipmentItem (30): only awakened items (param 10) are
-// tracked; supplies itemId, name and quality.
+// awakenedFlag reads the is-awakened marker from a NewEquipmentItem packet,
+// tolerating both wire layouts: originally an int at [10]; the 2026-07 patch
+// turned [10] into an opaque bytes blob (present on every item) and moved the
+// flag to a byte at [11].
+func awakenedFlag(m map[byte]any) bool {
+	if i64(m[10]) != 0 { // old layout ([]byte coerces to 0, so this is safe)
+		return true
+	}
+	if _, isBlob := m[10].([]byte); isBlob {
+		return i64(m[11]) != 0
+	}
+	return false
+}
+
+// onEquipment handles NewEquipmentItem (30). Static info (itemId/name/quality)
+// is cached for EVERY equipment packet regardless of the awakened flag, so the
+// soul packet can materialize a complete item even if the flag's wire location
+// shifts again; flagged items are additionally tracked right away.
 func (a *Awakened) onEquipment(m map[byte]any) {
-	if i64(m[10]) == 0 { // not awakened
-		return
-	}
 	obj := i64(m[0])
-	if obj == 0 {
+	idx := iN(m[1])
+	if obj == 0 || idx <= 0 {
 		return
 	}
-	idx := iN(m[1])
 	uniq, _ := a.info.UniqueName(idx)
 	name := uniq
 	if dn, ok := a.info.DisplayName(idx); ok && dn != "" {
 		name = dn
 	}
+	info := equipInfo{itemID: uniq, name: name, quality: dispatch.ItemQuality(m)}
 	loc := a.curLocation()
+
 	a.mu.Lock()
+	// cache (FIFO-bounded) for later soul-packet backfill
+	if _, seen := a.equipCache[obj]; !seen {
+		a.equipOrder = append(a.equipOrder, obj)
+		if len(a.equipOrder) > equipCacheMax {
+			delete(a.equipCache, a.equipOrder[0])
+			a.equipOrder = a.equipOrder[1:]
+		}
+	}
+	a.equipCache[obj] = info
+
+	// track when flagged awakened, or update an item the soul packet already
+	// materialized under this objectId.
+	_, tracked := a.items[strconv.FormatInt(obj, 10)]
+	if !awakenedFlag(m) && !tracked {
+		a.mu.Unlock()
+		return
+	}
 	it := a.at(obj)
-	it.ItemID = uniq
-	it.Name = name
-	it.Quality = iN(m[6])
+	it.ItemID = info.itemID
+	it.Name = info.name
+	it.Quality = info.quality
 	if loc != "" {
 		it.Location = loc
 	}
@@ -201,6 +248,21 @@ func (a *Awakened) onSoul(m map[byte]any) {
 	loc := a.curLocation()
 	a.mu.Lock()
 	it := a.at(obj)
+	// The equipment packet may have been skipped (flag layout drift) or not seen
+	// yet under this objectId — backfill its static info from the cache so the
+	// sync body always carries itemId/quality (the backend needs them to compute
+	// trait values).
+	if info, ok := a.equipCache[obj]; ok {
+		if it.ItemID == "" {
+			it.ItemID = info.itemID
+		}
+		if it.Name == "" {
+			it.Name = info.name
+		}
+		if it.Quality == 0 {
+			it.Quality = info.quality
+		}
+	}
 	if soulID != "" {
 		it.SoulID = soulID
 		it.Key = soulID // stable identity → dedup + selection

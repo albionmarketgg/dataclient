@@ -117,3 +117,20 @@ func String(v any) (string, bool) {
 	s, ok := v.(string)
 	return s, ok
 }
+
+// ItemQuality reads the quality (1-5) from a New*Item parameter table, tolerating
+// both wire layouts: originally quality sat at [6]; a 2026-07 game patch inserted
+// a second value field at [5] on equipment items, which shifted the crafter name
+// (a string) to [6] and quality to [7]. The string at [6] discriminates the two.
+// Unknown/absent quality defaults to 1 (the in-game minimum).
+func ItemQuality(p map[byte]any) int {
+	if q, ok := Int(p[6]); ok && q > 0 {
+		return q
+	}
+	if _, isString := p[6].(string); isString {
+		if q, ok := Int(p[7]); ok && q > 0 {
+			return q
+		}
+	}
+	return 1
+}

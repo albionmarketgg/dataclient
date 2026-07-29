@@ -240,15 +240,12 @@ func (m *Market) handleEMV(p map[byte]any) {
 }
 
 // handleItemEMV captures the EMV carried by a single New*Item event:
-// id = param[1], quality = param[6] (default 1), emv = param[4] (/10000).
+// id = param[1], emv = param[4] (/10000), quality via the layout-tolerant reader
+// ([6], or [7] since the 2026-07 equipment-packet shift).
 func (m *Market) handleItemEMV(p map[byte]any) {
 	id, _ := dispatch.Int(p[1])
 	emv, _ := dispatch.Int64(p[4])
-	quality := 1
-	if q, ok := dispatch.Int(p[6]); ok && q > 0 {
-		quality = q
-	}
-	m.recordEMV(id, quality, emv)
+	m.recordEMV(id, dispatch.ItemQuality(p), emv)
 }
 
 // recordEMV stores an estimated value (raw, /10000) into the local store and the
