@@ -16,6 +16,7 @@ import (
 	"github.com/albionmarketgg/dataclient/internal/market"
 	"github.com/albionmarketgg/dataclient/internal/mobs"
 	"github.com/albionmarketgg/dataclient/internal/photon"
+	"github.com/albionmarketgg/dataclient/internal/protomap"
 	"github.com/albionmarketgg/dataclient/internal/specs"
 	"github.com/albionmarketgg/dataclient/internal/state"
 	"github.com/albionmarketgg/dataclient/internal/store"
@@ -51,6 +52,7 @@ type Engine struct {
 
 	specsSvc *specs.Service
 	mobsSvc  *mobs.Service
+	protoSvc *protomap.Service
 
 	feedMu sync.Mutex
 	feed   []handlers.CaptureEvent
@@ -86,6 +88,16 @@ func New(cfg config.Config, itemDB ItemDB, dbPath string) *Engine {
 	e.disp = dispatch.New()
 	e.disp.OnAny(func() { e.packetsSeen.Add(1) })
 	e.parser = photon.NewParser(e.disp)
+
+	// Remotely-served packet-layout map: translates wire packets into the
+	// compiled layout before dispatch, so a game patch that moves params/codes
+	// can be hot-fixed server-side without a client release.
+	protoCache := ""
+	if dbPath != "" {
+		protoCache = filepath.Join(filepath.Dir(dbPath), "protocol-map.json")
+	}
+	e.protoSvc = protomap.New(cfg.EffectiveProtocolMapURL(), protoCache, e.log)
+	e.parser.SetRemapper(e.protoSvc)
 
 	var namer handlers.ItemNamer
 	var info trackers.ItemInfo
@@ -230,6 +242,9 @@ func (e *Engine) Start() error {
 	}
 	if e.mobsSvc != nil {
 		go e.mobsSvc.Load()
+	}
+	if e.protoSvc != nil {
+		go e.protoSvc.Poll(6 * time.Hour)
 	}
 	go e.startListener()
 	return nil

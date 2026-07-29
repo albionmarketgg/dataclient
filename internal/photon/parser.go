@@ -31,11 +31,23 @@ type segment struct {
 	bytesWritten int
 }
 
+// Remapper rewrites wire codes/params before routing — the hook for the
+// remotely-served protocol map (internal/protomap). It translates a packet from
+// the CURRENT wire layout into the compiled layout handlers were written
+// against; implementations must be identity for unmapped packets and safe for
+// concurrent use.
+type Remapper interface {
+	Event(code EventCode, params map[byte]any) (EventCode, map[byte]any)
+	Request(code OperationCode, params map[byte]any) (OperationCode, map[byte]any)
+	Response(code OperationCode, params map[byte]any) (OperationCode, map[byte]any)
+}
+
 // Parser parses Photon UDP payloads and dispatches messages to a Handler.
 type Parser struct {
 	handler Handler
 	pending map[int32]*segment
 	verbose bool
+	remap   Remapper
 
 	// inspect, if set, is called for every parsed message including unknown
 	// codes that routing would drop. For packet-inspection tools.
@@ -52,6 +64,9 @@ func NewParser(handler Handler) *Parser {
 func (p *Parser) SetInspector(fn func(typ string, leadingCode byte, returnCode int16, params map[byte]any)) {
 	p.inspect = fn
 }
+
+// SetRemapper installs the wire→compiled translation applied before routing.
+func (p *Parser) SetRemapper(r Remapper) { p.remap = r }
 
 // ReceivePacket parses one UDP payload (everything after the UDP header).
 func (p *Parser) ReceivePacket(payload []byte) PacketStatus {
@@ -297,65 +312,81 @@ func (p *Parser) onEvent(ev eventData) {
 			ev.params[paramEventCode] = int16(EvMove)
 		}
 	}
-	code, ok := parseEventCode(ev.params)
+	raw, ok := toInt16(ev.params[paramEventCode])
+	if !ok {
+		return
+	}
+	code, params, ok := p.resolveEvent(EventCode(raw), ev.params)
 	if !ok {
 		return
 	}
 	if p.handler != nil {
-		p.handler.HandleEvent(code, ev.params)
+		p.handler.HandleEvent(code, params)
 	}
 }
 
+// resolveEvent applies the remapper (wire→compiled) then the known-code check,
+// keeping the packed-nibble fallback (real code shifted left 4, low nibble 1)
+// operating on the raw wire value.
+func (p *Parser) resolveEvent(raw EventCode, params map[byte]any) (EventCode, map[byte]any, bool) {
+	code, out := raw, params
+	if p.remap != nil {
+		code, out = p.remap.Event(raw, params)
+	}
+	if IsKnownEventCode(code) {
+		return code, out, true
+	}
+	if u := uint16(raw); u&0x0f == 0x01 {
+		shifted := EventCode(u >> 4)
+		code, out = shifted, params
+		if p.remap != nil {
+			code, out = p.remap.Event(shifted, params)
+		}
+		if IsKnownEventCode(code) {
+			return code, out, true
+		}
+	}
+	return 0, nil, false
+}
+
 func (p *Parser) onRequest(req operationRequest) {
-	code, ok := parseOperationCode(req.params)
+	code, params, ok := p.resolveOperation(req.params, false)
 	if !ok {
 		return
 	}
 	if p.handler != nil {
-		p.handler.HandleRequest(code, req.params)
+		p.handler.HandleRequest(code, params)
 	}
 }
 
 func (p *Parser) onResponse(resp operationResponse) {
-	code, ok := parseOperationCode(resp.params)
+	code, params, ok := p.resolveOperation(resp.params, true)
 	if !ok {
 		return
 	}
 	if p.handler != nil {
-		p.handler.HandleResponse(code, resp.returnCode, resp.debugMessage, resp.params)
+		p.handler.HandleResponse(code, resp.returnCode, resp.debugMessage, params)
 	}
 }
 
-func parseEventCode(params map[byte]any) (EventCode, bool) {
-	raw, ok := toInt16(params[paramEventCode])
-	if !ok {
-		return 0, false
-	}
-	code := EventCode(raw)
-	if IsKnownEventCode(code) {
-		return code, true
-	}
-	// packed-nibble fallback: real code shifted left 4 with low nibble 1
-	u := uint16(raw)
-	if u&0x0f == 0x01 {
-		shifted := EventCode(u >> 4)
-		if IsKnownEventCode(shifted) {
-			return shifted, true
-		}
-	}
-	return 0, false
-}
-
-func parseOperationCode(params map[byte]any) (OperationCode, bool) {
+// resolveOperation applies the remapper then the known-code check.
+func (p *Parser) resolveOperation(params map[byte]any, isResponse bool) (OperationCode, map[byte]any, bool) {
 	raw, ok := toInt16(params[paramOperationCode])
 	if !ok {
-		return 0, false
+		return 0, nil, false
 	}
-	code := OperationCode(raw)
-	if IsKnownOperationCode(code) {
-		return code, true
+	code, out := OperationCode(raw), params
+	if p.remap != nil {
+		if isResponse {
+			code, out = p.remap.Response(code, params)
+		} else {
+			code, out = p.remap.Request(code, params)
+		}
 	}
-	return 0, false
+	if !IsKnownOperationCode(code) {
+		return 0, nil, false
+	}
+	return code, out, true
 }
 
 // toInt16 coerces byte/short/int parameter representations to int16.

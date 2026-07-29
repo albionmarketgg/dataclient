@@ -66,6 +66,10 @@ type Config struct {
 	// MobsURL is the source for mob index->name data (mobs.json). Empty means
 	// "<IngestBaseURL>/mobs.json" (our mirror).
 	MobsURL string `json:"mobsUrl"`
+	// ProtocolMapURL is the source for the remotely-served packet-layout map
+	// (protocol-map.json), used to hot-fix param/code shifts without a release.
+	// Empty means "<IngestBaseURL>/protocol-map.json".
+	ProtocolMapURL string `json:"protocolMapUrl"`
 	// CaptureDevice optionally restricts capture to one device (by description
 	// substring). Empty captures on all devices.
 	CaptureDevice string `json:"captureDevice"`
@@ -156,6 +160,15 @@ func (c Config) EffectiveAchievementsURL() string {
 		return c.AchievementsURL
 	}
 	return c.IngestBaseURL + "/achievements.xml"
+}
+
+// EffectiveProtocolMapURL returns the configured protocol-map URL, defaulting
+// to "<IngestBaseURL>/protocol-map.json" when empty.
+func (c Config) EffectiveProtocolMapURL() string {
+	if c.ProtocolMapURL != "" {
+		return c.ProtocolMapURL
+	}
+	return c.IngestBaseURL + "/protocol-map.json"
 }
 
 // EffectiveMobsURL returns the configured mob-name JSON URL, defaulting to
