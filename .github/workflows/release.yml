@@ -84,16 +84,53 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
           "$env:USERPROFILE\go\bin" | Out-File $env:GITHUB_PATH -Append
 
+      - name: Sync release version into wails.json (feeds the exe version resource)
+        shell: pwsh
+        run: |
+          $wj = Get-Content wails.json -Raw | ConvertFrom-Json
+          $wj.info.productVersion = "${{ steps.ver.outputs.version }}"
+          $wj | ConvertTo-Json -Depth 8 | Set-Content wails.json -Encoding utf8
+          Write-Host "wails.json productVersion -> ${{ steps.ver.outputs.version }}"
+
       - name: Build app (no bundled installer; Inno does that next)
         shell: pwsh
         run: |
           wails build -platform windows/amd64 -ldflags "-X main.version=${{ steps.ver.outputs.version }}"
+
+      - name: Set app exe version resource (rcedit)
+        shell: pwsh
+        run: |
+          # Wails' own version resource is written with a mismatched string-table
+          # translation (strings unreadable via the Windows version API), so we
+          # rebuild RT_VERSION wholesale with rcedit — blank/broken version
+          # metadata on unsigned exes is an AV-heuristic red flag (AV handoff §3.3).
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile rcedit.exe
+          $v = "${{ steps.ver.outputs.version }}"
+          .\rcedit.exe "build\bin\AlbionMarketDataClient.exe" `
+            --set-file-version $v --set-product-version $v `
+            --set-version-string CompanyName "Albion Market" `
+            --set-version-string FileDescription "Albion Market Data Client" `
+            --set-version-string LegalCopyright "© 2024–2026 Albion Market" `
+            --set-version-string ProductName "Albion Market Data Client" `
+            --set-version-string OriginalFilename "AlbionMarketDataClient.exe"
+
+      - name: Verify version resources on the built exe
+        shell: pwsh
+        run: |
+          $vi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$PWD\build\bin\AlbionMarketDataClient.exe")
+          Write-Host "ProductVersion: '$($vi.ProductVersion)'  FileVersion: '$($vi.FileVersion)'  Company: '$($vi.CompanyName)'"
+          if (-not $vi.ProductVersion -or $vi.ProductVersion.Trim() -ne "${{ steps.ver.outputs.version }}") {
+            throw "app exe version resource missing or wrong (want ${{ steps.ver.outputs.version }})"
+          }
 
       - name: Compile installer (Inno Setup, bundles WinPcap + WebView2)
         shell: pwsh
         run: |
           & "$env:ISCC" /DMyAppVersion=${{ steps.ver.outputs.version }} build\windows\installer\albionmarket.iss
           if (-not (Test-Path "build\bin\AlbionMarketDataClient-Setup.exe")) { throw "installer not produced" }
+          $vi = (Get-Item "build\bin\AlbionMarketDataClient-Setup.exe").VersionInfo
+          Write-Host "installer FileVersion: '$($vi.FileVersion)'  Copyright: '$($vi.LegalCopyright)'"
+          if (-not $vi.FileVersion -or -not $vi.FileVersion.Trim()) { throw "installer version resource missing" }
 
       - name: Stage release assets (stable + versioned names)
         shell: pwsh

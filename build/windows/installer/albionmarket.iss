@@ -35,6 +35,16 @@ WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; Full version resource on the setup exe: unsigned installers with blank
+; FileVersion/Copyright/OriginalFilename look statistically like malware to AV
+; heuristics (see DATA_CLIENT_AV_HANDOFF.md §3.3).
+VersionInfoVersion={#MyAppVersion}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoDescription={#MyAppName} Setup
+VersionInfoProductName={#MyAppName}
+VersionInfoProductVersion={#MyAppVersion}
+VersionInfoCopyright=© 2024–2026 Albion Market
+VersionInfoOriginalFileName=AlbionMarketDataClient-Setup.exe
 
 [Files]
 Source: "..\..\bin\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
