@@ -62,7 +62,16 @@ let sessionStarts: Record<string, number> = { gathering: 0, dungeon: 0, pvp: 0 }
 const feedTimes: Record<string, number[]> = { gathering: [], dungeon: [], pvp: [] };
 const toastShownAt: Record<string, number> = { gathering: 0, dungeon: 0, pvp: 0 };
 const toastDone: Record<string, boolean> = { gathering: false, dungeon: false, pvp: false };
-const FEED_KIND_TO_SESSION: Record<string, string> = { gather: "gathering", dungeon: "dungeon", loot: "dungeon" };
+// Only *mob kills* suggest a dungeon session — fame/silver/loot feed events fire
+// on general activity (crafting fame, bystanders looting in town) and produced
+// false "dungeon activity" toasts in cities.
+const FEED_KIND_TO_SESSION: Record<string, string> = { gather: "gathering", mobkill: "dungeon" };
+// events within the window that trigger the suggestion, per session kind
+const SUGGEST: Record<string, { win: number; n: number }> = {
+  gathering: { win: 60_000, n: 5 },
+  dungeon: { win: 120_000, n: 5 }, // ~5 mob kills in the last 2 min
+  pvp: { win: 60_000, n: 5 },
+};
 let route = "dashboard";
 let updateInfo: any = null;     // latest version-check result being shown
 let updateDismissed = "";       // soft update the user clicked "Later" on
@@ -258,6 +267,7 @@ function renderContent() {
   const content = document.getElementById("content")!;
   const actions = document.getElementById("topactions")!;
   actions.innerHTML = "";
+  captureButtons(actions); // capture status + Start/Stop toggle on every panel
   title.textContent = ({ dashboard: "Dashboard", feed: "Live Feed", trades: "Trades", mails: "Mails", dungeon: "Dungeon", damage: "Damage Meter", gathering: "Gathering", loot: "Loot", awakened: "Awakened Inventory", verify: "Verification", logs: "Logs", settings: "Settings" } as any)[route];
 
   if (route === "dashboard") return renderDashboard(content, actions);
@@ -461,7 +471,7 @@ async function renderDungeon(content: HTMLElement, actions: HTMLElement) {
     <div class="panel" style="margin-bottom:16px"><h3>Fame</h3>${fameChartHTML(fame)}</div>
     <div class="panel"><h3>Dungeon capture log</h3><div id="klog"></div></div>
     ${websiteNote}`;
-  renderKindLog(content.querySelector("#klog")!, ["dungeon"], "No dungeon activity captured yet. Fame and silver from dungeon runs appear here.");
+  renderKindLog(content.querySelector("#klog")!, ["dungeon", "mobkill"], "No dungeon activity captured yet. Mob kills, fame and silver from dungeon runs appear here.");
 }
 
 async function renderDamageMeter(content: HTMLElement, actions: HTMLElement) {
@@ -611,8 +621,7 @@ function captureButtons(actions: HTMLElement) {
   actions.appendChild(toggle);
 }
 
-function renderDashboard(content: HTMLElement, actions: HTMLElement) {
-  captureButtons(actions);
+function renderDashboard(content: HTMLElement, _actions: HTMLElement) {
   const cardsDiv = (label: string, value: string, cls = "") =>
     `<div class="card"><div class="label">${label}</div><div class="value ${cls}">${value}</div></div>`;
   content.innerHTML = `
@@ -643,8 +652,7 @@ function renderDashboard(content: HTMLElement, actions: HTMLElement) {
   renderFeedTable(content.querySelector("#recent")!, feed.slice(-12).reverse());
 }
 
-function renderFeed(content: HTMLElement, actions: HTMLElement) {
-  captureButtons(actions);
+function renderFeed(content: HTMLElement, _actions: HTMLElement) {
   content.innerHTML = `<div class="panel"><h3>Live Capture Feed</h3><div id="feedtable"></div></div>`;
   renderFeedTable(content.querySelector("#feedtable")!, [...feed].reverse());
 }
@@ -788,7 +796,6 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
 }
 
 const TOAST_TTL = 5 * 60 * 1000;          // a suggestion stays ~5 min
-const TOAST_RATE = 5;                      // events in the last 60s to suggest
 
 // renderToasts draws one "start a session?" suggestion per active kind.
 function renderToasts() {
@@ -822,10 +829,10 @@ async function tick() {
   const now = Date.now();
   let changed = false;
   for (const k of ["gathering", "dungeon", "pvp"]) {
-    feedTimes[k] = feedTimes[k].filter((t) => now - t < 60000);
+    feedTimes[k] = feedTimes[k].filter((t) => now - t < SUGGEST[k].win);
     if (toastShownAt[k] > 0 && now - toastShownAt[k] > TOAST_TTL) { toastShownAt[k] = 0; toastDone[k] = true; changed = true; }
     if (sessionStarts[k] > 0) { toastShownAt[k] = 0; } // active -> no suggestion
-    if (feedTimes[k].length >= TOAST_RATE && sessionStarts[k] === 0 && toastShownAt[k] === 0 && !toastDone[k]) {
+    if (feedTimes[k].length >= SUGGEST[k].n && sessionStarts[k] === 0 && toastShownAt[k] === 0 && !toastDone[k]) {
       toastShownAt[k] = now; changed = true;
     }
   }
@@ -902,7 +909,14 @@ async function init() {
   render();
   const r = rt();
   if (r?.EventsOn) {
-    r.EventsOn("state", (s: Snapshot) => { snapshot = s; renderSidebarStatus(); if (route === "dashboard") renderContent(); });
+    r.EventsOn("state", (s: Snapshot) => {
+      const listeningChanged = s.listening !== snapshot.listening;
+      snapshot = s;
+      renderSidebarStatus();
+      // the capture toggle now lives in the top bar of EVERY panel — refresh it
+      // when the listening state flips (or live-refresh the dashboard as before)
+      if (route === "dashboard" || listeningChanged) renderContent();
+    });
     r.EventsOn("stats", (s: Stats) => { stats = s; if (route === "dashboard") renderContent(); });
     r.EventsOn("userstats", (s: UserStats) => { userStats = s; if (route === "dashboard") renderContent(); });
     r.EventsOn("feed", (f: Feed) => {

@@ -109,6 +109,7 @@ type Combat struct {
 
 	mu         sync.Mutex
 	names      map[int64]string
+	mobs       map[int64]bool   // live mob object ids (for kill detection; removed on death)
 	selfSeen   map[int64]bool   // object ids that have been the local player (survive zone changes)
 	memberName map[int64]string // object id -> stable group-player name (self or party)
 	encs       []*encounter
@@ -135,7 +136,7 @@ func (c *Combat) OnDungeonEvent(fn func(DungeonEvent)) { c.onDungeon = fn }
 // NewCombat creates a combat tracker. party, mobName and selfID may all be nil
 // (mobs then show as "Mob <index>" and no participant is flagged as self).
 func NewCombat(party *Party, mobName func(int) (string, bool), selfID func() (int64, bool)) *Combat {
-	return &Combat{party: party, mobName: mobName, selfID: selfID, names: map[int64]string{}, selfSeen: map[int64]bool{}, memberName: map[int64]string{}, nextNum: 1}
+	return &Combat{party: party, mobName: mobName, selfID: selfID, names: map[int64]string{}, mobs: map[int64]bool{}, selfSeen: map[int64]bool{}, memberName: map[int64]string{}, nextNum: 1}
 }
 
 // OnChange registers a change callback.
@@ -174,6 +175,7 @@ func (c *Combat) onNewMob(m map[byte]any) {
 		if _, ok := c.names[obj]; !ok {
 			c.names[obj] = name
 		}
+		c.mobs[obj] = true
 		c.mu.Unlock()
 	}
 }
@@ -195,7 +197,11 @@ func (c *Combat) ensureEncounter(now time.Time) *encounter {
 	return e
 }
 
-func (c *Combat) applyHealth(target, causer int64, change float64, now time.Time) {
+// applyHealth books one health change. newHealth is the target's health AFTER
+// the change (param [3]); pass NaN when unknown — a damaging hit that brings a
+// known mob to <= 0 counts as a mob kill (feeds the "mobkill" event, which
+// drives the dungeon-session suggestion).
+func (c *Combat) applyHealth(target, causer int64, change, newHealth float64, now time.Time) {
 	if change == 0 {
 		return
 	}
@@ -203,6 +209,7 @@ func (c *Combat) applyHealth(target, causer int64, change float64, now time.Time
 	if amount == 0 {
 		return
 	}
+	killed := ""
 	c.mu.Lock()
 	e := c.ensureEncounter(now)
 	e.lastAt = now
@@ -224,21 +231,37 @@ func (c *Combat) applyHealth(target, causer int64, change float64, now time.Time
 			e.byEntity[target] = ta
 		}
 		ta.taken += amount
+		// killing blow on a mob (delete = one kill event per mob)
+		if newHealth <= 0 && !math.IsNaN(newHealth) && c.mobs[target] {
+			delete(c.mobs, target)
+			killed = c.names[target]
+			if killed == "" {
+				killed = "Mob"
+			}
+		}
 	} else {
 		agg.healing += amount
 	}
 	c.mu.Unlock()
+	if killed != "" && c.onFeed != nil {
+		c.onFeed("mobkill", killed+" slain", 1)
+	}
 }
 
 func (c *Combat) onHealth(m map[byte]any) {
 	change, _ := toFloat(m[2])
-	c.applyHealth(i64(m[0]), i64(m[6]), change, time.Now())
+	nh := math.NaN()
+	if v, ok := toFloat(m[3]); ok {
+		nh = v
+	}
+	c.applyHealth(i64(m[0]), i64(m[6]), change, nh, time.Now())
 	c.fire()
 }
 
 func (c *Combat) onHealthBatch(m map[byte]any) {
 	target := i64(m[0])
 	changes := toFloatSlice(m[2])
+	newVals := toFloatSlice(m[3])
 	causers := dispatch.Int64Slice(m[6])
 	now := time.Now()
 	for i := range changes {
@@ -246,7 +269,11 @@ func (c *Combat) onHealthBatch(m map[byte]any) {
 		if i < len(causers) {
 			causer = causers[i]
 		}
-		c.applyHealth(target, causer, changes[i], now)
+		nh := math.NaN()
+		if i < len(newVals) {
+			nh = newVals[i]
+		}
+		c.applyHealth(target, causer, changes[i], nh, now)
 	}
 	c.fire()
 }

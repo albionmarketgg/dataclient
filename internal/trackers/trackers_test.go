@@ -127,6 +127,36 @@ func TestDungeonEventPairing(t *testing.T) {
 	}
 }
 
+func TestMobKillFeed(t *testing.T) {
+	c := NewCombat(nil, nil, nil)
+	parser := newPipe(c.Register)
+	var mu sync.Mutex
+	var kills []string
+	c.OnFeed(func(kind, detail string, _ int) {
+		if kind == "mobkill" {
+			mu.Lock()
+			kills = append(kills, detail)
+			mu.Unlock()
+		}
+	})
+	parser.ReceivePacket(ev(photon.EvNewMob, map[byte]any{0: int64(900), 1: int32(7)}))
+	// non-lethal hit: no kill ([3] = health after the change)
+	parser.ReceivePacket(ev(photon.EvHealthUpdate, map[byte]any{0: int64(900), 2: int64(-100), 3: int64(200), 6: int64(50)}))
+	// killing blow
+	parser.ReceivePacket(ev(photon.EvHealthUpdate, map[byte]any{0: int64(900), 2: int64(-200), 3: int64(0), 6: int64(50)}))
+	// further damage on the corpse must not double-count
+	parser.ReceivePacket(ev(photon.EvHealthUpdate, map[byte]any{0: int64(900), 2: int64(-50), 3: int64(0), 6: int64(50)}))
+	// a hit on a non-mob (player) reaching 0 must not fire
+	parser.ReceivePacket(ev(photon.EvNewCharacter, map[byte]any{0: int64(51), 1: "Bob", 7: "bob-guid"}))
+	parser.ReceivePacket(ev(photon.EvHealthUpdate, map[byte]any{0: int64(51), 2: int64(-500), 3: int64(0), 6: int64(50)}))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(kills) != 1 {
+		t.Fatalf("want exactly 1 mobkill event, got %d: %v", len(kills), kills)
+	}
+}
+
 func TestFamePremiumBonus(t *testing.T) {
 	old := dungeonPairWindow
 	dungeonPairWindow = 60 * time.Millisecond
