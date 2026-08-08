@@ -194,6 +194,16 @@ tbody tr:hover { background: var(--bg-3); }
 .bad { color: var(--bad); }
 .good { color: var(--good); }
 .acc { color: var(--accent); word-break: break-all; }
+/* persistent "private uploads are on" badge in the top bar (click to turn off) */
+.privbadge {
+  display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px;
+  border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+  background: rgba(250, 166, 26, .12); border: 1px solid rgba(250, 166, 26, .45);
+  color: var(--warn); white-space: nowrap;
+}
+.privbadge:hover { background: rgba(250, 166, 26, .2); }
+.privbadge .off { color: var(--text-dim); font-weight: 500; }
+
 .live { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-med); }
 .live .dot { animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }

@@ -614,7 +614,35 @@ async function renderMails(content: HTMLElement, _actions: HTMLElement) {
   }</tbody></table>`;
 }
 
+// refreshActions redraws just the top-bar controls (capture toggle + private
+// badge), leaving the panel below untouched.
+function refreshActions() {
+  const actions = document.getElementById("topactions");
+  if (!actions) return;
+  actions.innerHTML = "";
+  captureButtons(actions);
+}
+
+// setPrivateUploads persists the private-uploads switch from anywhere in the UI.
+// Turning it ON also drops the AODP opt-in (a public dataset would publish
+// immediately, defeating the hold-back).
+async function setPrivateUploads(on: boolean) {
+  if (!config) return;
+  const next: Config = { ...config, privateUploads: on, uploadToAodp: on ? false : config.uploadToAodp };
+  await App()?.SaveConfig(next);
+  config = next;
+  renderContent();
+}
+
 function captureButtons(actions: HTMLElement) {
+  // Private uploads stay visible on every panel so they can't be left on
+  // unnoticed — clicking the badge turns them off.
+  if (config?.privateUploads) {
+    const badge = el(`<button class="privbadge" title="Your uploads are held back from public stats. Contributed market prices are still published later. Click to turn off.">
+      <span class="dot warn"></span> Private uploads <span class="off">· turn off</span></button>`);
+    badge.addEventListener("click", () => setPrivateUploads(false));
+    actions.appendChild(badge);
+  }
   const live = el(`<span class="live">${snapshot.listening ? '<span class="dot ok"></span> live' : ""}</span>`);
   actions.appendChild(live);
   const toggle = el(`<button class="btn ${snapshot.listening ? "ghost" : ""}">${snapshot.listening ? "Stop Capture" : "Start Capture"}</button>`);
@@ -829,6 +857,7 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
     const msg = content.querySelector("#saveMsg")!;
     msg.textContent = err ? "Error: " + err : "Saved.";
     config = next;
+    refreshActions(); // show/hide the private-uploads badge without losing "Saved."
   });
 }
 
