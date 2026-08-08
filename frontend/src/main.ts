@@ -29,6 +29,7 @@ type Config = {
   uploadTrades: boolean; uploadMails: boolean; uploadGathering: boolean;
   uploadCombat: boolean; uploadLoot: boolean; uploadParty: boolean;
   uploadSpecs: boolean; uploadAwakened: boolean;
+  privateUploads: boolean; uploadToAodp: boolean;
   itemsUrl: string; captureDevice: string;
   marketOrdersTopic: string; marketHistoriesTopic: string; goldPricesTopic: string;
   networkStartDelaySecs: number; idleMinutes: number; idleCheckMinutes: number;
@@ -729,6 +730,31 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
         </div>
       </div>
 
+      <div class="panel settings-wide">
+        <h3>Privacy &amp; sharing</h3>
+        <div class="panel-body">
+          <div class="field switch">
+            <input type="checkbox" id="privateUploads" ${c.privateUploads ? "checked" : ""}/>
+            <label for="privateUploads">Private uploads</label>
+          </div>
+          <div class="dim" style="font-size:12px;margin:-6px 0 14px 0">
+            Your uploads are held back from public stats and leaderboards. Market prices you
+            contribute are still <b>published later</b> (released automatically after a couple of
+            hours), so this delays their publication rather than withholding them permanently.
+            Turning this on disables sharing with the Albion Online Data Project.
+          </div>
+          <div class="field switch">
+            <input type="checkbox" id="uploadToAodp" ${c.uploadToAodp ? "checked" : ""} ${c.privateUploads ? "disabled" : ""}/>
+            <label for="uploadToAodp">Also contribute market data to the Albion Online Data Project</label>
+          </div>
+          <div class="dim" style="font-size:12px;margin-top:-6px">
+            Optional. Sends <b>market prices only</b> (orders, price history, gold) to the public
+            AODP dataset — anonymously, with no account details, and never any of your gameplay
+            data. ${c.privateUploads ? "<b>Unavailable while private uploads are on.</b>" : ""}
+          </div>
+        </div>
+      </div>
+
       <div class="panel">
         <h3>Network adapter</h3>
         <div class="panel-body">
@@ -766,6 +792,14 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
   const opts = ["", ...devices];
   sel.innerHTML = opts.map((d) => `<option value="${escapeHtml(d)}" ${d === c.captureDevice ? "selected" : ""}>${d ? escapeHtml(d) : "All adapters"}</option>`).join("");
 
+  // live interlock: private uploads immediately disable the AODP opt-in
+  const priv = content.querySelector("#privateUploads") as HTMLInputElement;
+  const aodp = content.querySelector("#uploadToAodp") as HTMLInputElement;
+  priv.addEventListener("change", () => {
+    aodp.disabled = priv.checked;
+    if (priv.checked) aodp.checked = false;
+  });
+
   content.querySelector("#acctLogin")?.addEventListener("click", startLogin);
   content.querySelector("#acctLogout")?.addEventListener("click", async () => {
     await App()?.Logout(); user = { id: "", username: "", avatar: "" }; renderContent(); renderAuthCard();
@@ -787,6 +821,9 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
       uploadParty: chk("uploadParty"),
       uploadSpecs: chk("uploadSpecs"),
       uploadAwakened: chk("uploadAwakened"),
+      privateUploads: chk("privateUploads"),
+      // private wins: never contribute to a public third-party dataset
+      uploadToAodp: chk("uploadToAodp") && !chk("privateUploads"),
     };
     const err = await App()?.SaveConfig(next);
     const msg = content.querySelector("#saveMsg")!;

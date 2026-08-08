@@ -9,19 +9,22 @@ import (
 )
 
 // Server identifies an Albion game server (region) by its source-IP prefixes.
+// AodpPowURL is that region's public Albion Online Data Project ingest, used
+// only when the user opts in to contributing market data there.
 type Server struct {
-	ID       int      `json:"id"`
-	Name     string   `json:"name"`
-	HostIPs  []string `json:"hostIps"`
+	ID         int      `json:"id"`
+	Name       string   `json:"name"`
+	HostIPs    []string `json:"hostIps"`
+	AodpPowURL string   `json:"aodpPowUrl"`
 }
 
 // DefaultServers are the public Albion game-server IP prefixes used to label
 // captured data by region.
 func DefaultServers() []Server {
 	return []Server{
-		{ID: 1, Name: "Americas", HostIPs: []string{"5.188.125", "85.234.70"}},
-		{ID: 2, Name: "Asia", HostIPs: []string{"5.45.187"}},
-		{ID: 3, Name: "Europe", HostIPs: []string{"193.169.238"}},
+		{ID: 1, Name: "Americas", HostIPs: []string{"5.188.125", "85.234.70"}, AodpPowURL: "https://pow.west.albion-online-data.com"},
+		{ID: 2, Name: "Asia", HostIPs: []string{"5.45.187"}, AodpPowURL: "https://pow.east.albion-online-data.com"},
+		{ID: 3, Name: "Europe", HostIPs: []string{"193.169.238"}, AodpPowURL: "https://pow.europe.albion-online-data.com"},
 	}
 }
 
@@ -57,6 +60,16 @@ type Config struct {
 	// UploadAwakened syncs awakened weapons to the albionmarket.gg dashboard.
 	// Login-gated.
 	UploadAwakened bool `json:"uploadAwakened"`
+
+	// PrivateUploads marks every upload as private (X-Private: 1) so the backend
+	// holds it back from public surfaces. Note the backend releases held data on a
+	// delay — this is an embargo, not permanent secrecy; the UI must say so.
+	// Forces UploadToAODP off (a third party would publish immediately).
+	PrivateUploads bool `json:"privateUploads"`
+	// UploadToAODP additionally contributes MARKET data (orders/history/gold, never
+	// personal or gameplay data) to the Albion Online Data Project, anonymously.
+	// Opt-in, default off.
+	UploadToAODP bool `json:"uploadToAodp"`
 
 	// ItemsURL is the source for item id->name data. Empty means "<IngestBaseURL>/items.txt".
 	ItemsURL string `json:"itemsUrl"`

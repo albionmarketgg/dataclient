@@ -52,11 +52,42 @@ type Uploader struct {
 	// tokenFn, when set, returns a bearer token + user id to attribute uploads
 	// to a logged-in user. ok=false means anonymous.
 	tokenFn func() (token, userID string, ok bool)
+
+	// baseFn overrides cfg.IngestBaseURL per upload (the AODP mirror's endpoint
+	// depends on the detected region). Empty result = skip the upload.
+	baseFn func() string
+	// privateFn reports whether uploads must be marked private (X-Private: 1).
+	privateFn func() bool
+
+	// mirror receives copies of market uploads (AODP contribution) while
+	// mirrorOn reports true. Never set on the mirror itself.
+	mirror   *Uploader
+	mirrorOn func() bool
 }
 
 // SetTokenProvider wires an auth token source for attributing uploads.
 func (u *Uploader) SetTokenProvider(fn func() (token, userID string, ok bool)) {
 	u.tokenFn = fn
+}
+
+// SetPrivateProvider wires the "mark uploads private" switch.
+func (u *Uploader) SetPrivateProvider(fn func() bool) { u.privateFn = fn }
+
+// SetMirror registers a secondary uploader that receives copies of MARKET
+// uploads (orders/history/gold) while enabled reports true. Used for the opt-in
+// Albion Online Data Project contribution; the mirror must be built with
+// NewAnonymous so no account credentials reach a third party.
+func (u *Uploader) SetMirror(m *Uploader, enabled func() bool) {
+	u.mirror = m
+	u.mirrorOn = enabled
+}
+
+// mirrorTo forwards a market payload to the mirror when it's enabled.
+func (u *Uploader) mirrorTo(topic string, payload any) {
+	if u.mirror == nil || u.mirrorOn == nil || !u.mirrorOn() {
+		return
+	}
+	u.mirror.enqueue(topic, payload)
 }
 
 // New builds an Uploader.
@@ -71,6 +102,25 @@ func New(cfg config.Config, logf func(string)) *Uploader {
 		queue:      make(chan job, 256),
 		identifier: defaultIdentifier,
 	}
+}
+
+// NewAnonymous builds an Uploader for a THIRD-PARTY endpoint: it never carries
+// account credentials (no bearer token, no user id, no private flag) and always
+// uses the anonymous per-upload identifier. baseFn supplies the destination per
+// upload (returning "" skips it). Used for the AODP contribution mirror.
+func NewAnonymous(cfg config.Config, baseFn func() string, logf func(string)) *Uploader {
+	u := New(cfg, logf)
+	u.cfg.RequirePoW = true // AODP's public ingest is PoW-only
+	u.baseFn = baseFn
+	return u
+}
+
+// base returns the destination for this uploader ("" = nothing to upload to).
+func (u *Uploader) base() string {
+	if u.baseFn != nil {
+		return u.baseFn()
+	}
+	return u.cfg.IngestBaseURL
 }
 
 // SetServerID records the current server id used in uploads.
@@ -110,11 +160,13 @@ func (u *Uploader) EnqueueMarket(up market.Upload) {
 		return
 	}
 	u.enqueue(u.cfg.MarketOrdersTopic, up)
+	u.mirrorTo(u.cfg.MarketOrdersTopic, up)
 }
 
 // EnqueueHistories queues a market-history upload.
 func (u *Uploader) EnqueueHistories(up market.HistoriesUpload) {
 	u.enqueue(u.cfg.MarketHistoriesTopic, up)
+	u.mirrorTo(u.cfg.MarketHistoriesTopic, up)
 }
 
 // EnqueueGold queues a gold-price upload.
@@ -123,6 +175,7 @@ func (u *Uploader) EnqueueGold(up market.GoldPriceUpload) {
 		return
 	}
 	u.enqueue(u.cfg.GoldPricesTopic, up)
+	u.mirrorTo(u.cfg.GoldPricesTopic, up)
 }
 
 // UploadEMV ships an estimated-market-value batch (camelCase JSON, no PoW).
@@ -191,8 +244,12 @@ func (u *Uploader) send(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
+	base := u.base()
+	if base == "" {
+		return nil // no destination (e.g. AODP mirror before the region is known)
+	}
 	if !u.cfg.RequirePoW {
-		return u.post(ctx, u.cfg.IngestBaseURL+"/"+j.topic, "application/json", body)
+		return u.post(ctx, base+"/"+j.topic, "application/json", body)
 	}
 	req, err := u.getPow(ctx)
 	if err != nil {
@@ -212,12 +269,12 @@ func (u *Uploader) send(ctx context.Context, j job) error {
 		}
 	}
 	form.Set("identifier", identifier)
-	return u.post(ctx, u.cfg.IngestBaseURL+"/pow/"+j.topic, "application/x-www-form-urlencoded", []byte(form.Encode()))
+	return u.post(ctx, base+"/pow/"+j.topic, "application/x-www-form-urlencoded", []byte(form.Encode()))
 }
 
 func (u *Uploader) getPow(ctx context.Context) (pow.Request, error) {
 	var pr pow.Request
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.cfg.IngestBaseURL+"/pow", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.base()+"/pow", nil)
 	if err != nil {
 		return pr, err
 	}
@@ -243,12 +300,18 @@ func (u *Uploader) post(ctx context.Context, url, contentType string, body []byt
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("User-Agent", "AlbionMarketDataClient")
-	if u.tokenFn != nil {
-		if token, userID, ok := u.tokenFn(); ok {
-			req.Header.Set("Authorization", "Bearer "+token)
-			if userID != "" {
-				req.Header.Set("X-User-Id", userID)
+	// An anonymous uploader (third-party endpoint) carries no account identity.
+	if u.baseFn == nil {
+		if u.tokenFn != nil {
+			if token, userID, ok := u.tokenFn(); ok {
+				req.Header.Set("Authorization", "Bearer "+token)
+				if userID != "" {
+					req.Header.Set("X-User-Id", userID)
+				}
 			}
+		}
+		if u.privateFn != nil && u.privateFn() {
+			req.Header.Set("X-Private", "1")
 		}
 	}
 	resp, err := u.client.Do(req)

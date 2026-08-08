@@ -248,6 +248,10 @@ func (a *App) SaveConfig(cfg config.Config) string {
 		return err.Error()
 	}
 	a.applyAutostart()
+	// privacy + AODP contribution must take effect at once, not after a restart
+	a.eng.ApplyConfig(cfg)
+	a.usersync.SetPrivate(cfg.PrivateUploads)
+	a.sessions.SetPrivate(cfg.PrivateUploads)
 	a.eng.Log("Configuration saved. Restart to apply capture changes.")
 	return ""
 }

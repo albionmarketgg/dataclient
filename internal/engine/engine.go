@@ -35,6 +35,7 @@ type Engine struct {
 	Cfg   config.Config
 	State *state.State
 	Up    *upload.Uploader
+	aodp  *upload.Uploader // opt-in Albion Online Data Project mirror (market data only)
 
 	disp      *dispatch.Dispatcher
 	parser    *photon.Parser
@@ -62,6 +63,12 @@ type Engine struct {
 
 	packetsSeen atomic.Int64
 
+	// Upload switches that must take effect immediately (a privacy toggle that
+	// only applied after a restart would silently break its promise). Read from
+	// the uploader goroutines, so they're atomics rather than Cfg fields.
+	privateUploads atomic.Bool
+	aodpEnabled    atomic.Bool
+
 	onFeed     func(handlers.CaptureEvent)
 	onLog      func(LogLine)
 	onState    func(state.Snapshot)
@@ -84,7 +91,26 @@ func New(cfg config.Config, itemDB ItemDB, dbPath string) *Engine {
 		Cfg:   cfg,
 		State: state.New(),
 	}
+	e.privateUploads.Store(cfg.PrivateUploads)
+	e.aodpEnabled.Store(cfg.UploadToAODP)
 	e.Up = upload.New(cfg, e.log)
+	e.Up.SetPrivateProvider(e.privateUploads.Load)
+	// Opt-in AODP contribution: market data only, anonymous, to the detected
+	// region's public ingest. Private uploads force it off — a third party would
+	// publish immediately, defeating the hold-back.
+	e.aodp = upload.NewAnonymous(cfg, func() string {
+		if !e.aodpContributing() {
+			return ""
+		}
+		id := e.State.Snapshot().ServerID
+		for _, s := range e.Cfg.Servers {
+			if s.ID == id {
+				return s.AodpPowURL
+			}
+		}
+		return ""
+	}, e.log)
+	e.Up.SetMirror(e.aodp, e.aodpContributing)
 	e.disp = dispatch.New()
 	e.disp.OnAny(func() { e.packetsSeen.Add(1) })
 	e.parser = photon.NewParser(e.disp)
@@ -205,6 +231,21 @@ func New(cfg config.Config, itemDB ItemDB, dbPath string) *Engine {
 	return e
 }
 
+// aodpContributing reports whether market data should also go to AODP. Private
+// uploads always win: contributing to a public third-party dataset would
+// publish immediately and defeat the hold-back.
+func (e *Engine) aodpContributing() bool {
+	return e.aodpEnabled.Load() && !e.privateUploads.Load()
+}
+
+// ApplyConfig applies settings that take effect without a restart: upload
+// privacy and the AODP contribution opt-in. (Capture-related settings still
+// need a restart.)
+func (e *Engine) ApplyConfig(cfg config.Config) {
+	e.privateUploads.Store(cfg.PrivateUploads)
+	e.aodpEnabled.Store(cfg.UploadToAODP)
+}
+
 // Dispatcher exposes the dispatcher for registering additional handlers.
 func (e *Engine) Dispatcher() *dispatch.Dispatcher { return e.disp }
 
@@ -236,6 +277,9 @@ func (e *Engine) startListener() {
 // Start begins uploading and capturing.
 func (e *Engine) Start() error {
 	e.Up.Start()
+	if e.aodp != nil {
+		e.aodp.Start()
+	}
 	e.market.Start()
 	if e.specsSvc != nil {
 		go e.specsSvc.Load()
@@ -255,6 +299,9 @@ func (e *Engine) Stop() {
 	e.listener.Stop()
 	e.market.Stop()
 	e.Up.Stop()
+	if e.aodp != nil {
+		e.aodp.Stop()
+	}
 	if e.store != nil {
 		e.store.Close()
 	}

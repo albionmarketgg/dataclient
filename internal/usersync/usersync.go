@@ -68,6 +68,7 @@ type Syncer struct {
 	sessions *SessionManager // tags uploads with the active sessionId (may be nil)
 
 	clientVersion string                  // sent as X-Client-Version (empty = omitted)
+	private       atomic.Bool             // sends X-Private: 1 when set
 	onAwakened    func([]ResolvedAwakened) // backend-computed trait values callback
 
 	awMu    sync.Mutex
@@ -83,6 +84,10 @@ func (s *Syncer) SetSessions(sm *SessionManager) { s.sessions = sm }
 
 // SetClientVersion sets the value sent as the X-Client-Version header on uploads.
 func (s *Syncer) SetClientVersion(v string) { s.clientVersion = v }
+
+// SetPrivate toggles the X-Private header on uploads, asking the backend to
+// hold this user's data back from public surfaces.
+func (s *Syncer) SetPrivate(v bool) { s.private.Store(v) }
 
 // SetOnAwakened registers the callback that receives backend-computed awakened
 // trait values parsed from the /user/awakened/sync response.
@@ -575,6 +580,9 @@ func (s *Syncer) postRawResp(ctx context.Context, jwt, path string, body []byte)
 	req.Header.Set("User-Agent", "AlbionMarketDataClient")
 	if s.clientVersion != "" {
 		req.Header.Set("X-Client-Version", s.clientVersion)
+	}
+	if s.private.Load() {
+		req.Header.Set("X-Private", "1")
 	}
 	if _, userID, ok := s.token(); ok && userID != "" {
 		req.Header.Set("X-User-Id", userID)

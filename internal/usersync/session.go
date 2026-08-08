@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,7 +41,8 @@ type SessionManager struct {
 	client     *http.Client
 	logf       func(string)
 
-	clientVersion string // sent as X-Client-Version (empty = omitted)
+	clientVersion string      // sent as X-Client-Version (empty = omitted)
+	private       atomic.Bool // sends X-Private: 1 when set
 
 	mu     sync.Mutex
 	active map[string]*sessionState
@@ -51,6 +53,9 @@ type SessionManager struct {
 
 // SetClientVersion sets the value sent as the X-Client-Version header.
 func (m *SessionManager) SetClientVersion(v string) { m.clientVersion = v }
+
+// SetPrivate toggles the X-Private header on session requests.
+func (m *SessionManager) SetPrivate(v bool) { m.private.Store(v) }
 
 // NewSessionManager builds a manager. baseURL is the ingest origin; token returns
 // the bearer JWT (ok=false when logged out).
@@ -327,6 +332,9 @@ func (m *SessionManager) postJSON(jwt, path string, body any, out any) bool {
 	req.Header.Set("User-Agent", "AlbionMarketDataClient")
 	if m.clientVersion != "" {
 		req.Header.Set("X-Client-Version", m.clientVersion)
+	}
+	if m.private.Load() {
+		req.Header.Set("X-Private", "1")
 	}
 	if _, userID, ok := m.token(); ok && userID != "" {
 		req.Header.Set("X-User-Id", userID)
