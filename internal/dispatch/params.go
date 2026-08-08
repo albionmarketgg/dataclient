@@ -72,8 +72,18 @@ func Int(v any) (int, bool) {
 	return 0, false
 }
 
-// Int64Slice extracts a slice of int64 from an integer-array param.
+// Int64Slice extracts a slice of int64 from an integer-array param. Photon
+// encodes an integer array whose values all fit in a byte as a ByteArray, which
+// deserializes to []byte — common for low-volume data (e.g. price-history sale
+// counts with zero/small days), so both shapes must be accepted.
 func Int64Slice(v any) []int64 {
+	if b, ok := v.([]byte); ok {
+		out := make([]int64, len(b))
+		for i, e := range b {
+			out[i] = int64(e)
+		}
+		return out
+	}
 	arr, ok := v.([]any)
 	if !ok {
 		return nil
@@ -87,8 +97,16 @@ func Int64Slice(v any) []int64 {
 	return out
 }
 
-// Uint64Slice extracts a slice of uint64 from an integer-array param.
+// Uint64Slice extracts a slice of uint64 from an integer-array param (accepts
+// the ByteArray shape like Int64Slice).
 func Uint64Slice(v any) []uint64 {
+	if b, ok := v.([]byte); ok {
+		out := make([]uint64, len(b))
+		for i, e := range b {
+			out[i] = uint64(e)
+		}
+		return out
+	}
 	arr, ok := v.([]any)
 	if !ok {
 		return nil
