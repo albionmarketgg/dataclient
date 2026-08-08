@@ -30,6 +30,7 @@ type Listener struct {
 
 	mu       sync.Mutex
 	handles  map[string]*pcap.Handle // keyed by pcap device name
+	reported map[string]string       // device name -> last open-failure logged (spam guard)
 	running  bool
 	stopOnce chan struct{}
 
@@ -81,6 +82,7 @@ func (l *Listener) Start() error {
 	l.running = true
 	l.narrowed = false
 	l.handles = map[string]*pcap.Handle{}
+	l.reported = map[string]string{}
 	l.stopOnce = make(chan struct{})
 	stop := l.stopOnce
 	l.mu.Unlock()
@@ -128,19 +130,45 @@ func (l *Listener) scan(stop chan struct{}) (int, error) {
 		}
 		h, err := pcap.OpenLive(dev.Name, 65536, false, pcap.BlockForever)
 		if err != nil {
+			// Not all adapters are capturable (e.g. some USB-tethering drivers
+			// that the capture driver can't bind). Say so — a user whose game
+			// traffic rides exactly that adapter otherwise sees "capture
+			// running" with eternal zero traffic and no clue why.
+			l.noteDeviceError(dev, "cannot open", err)
 			continue
 		}
 		if err := h.SetBPFFilter(l.cfg.PacketFilter); err != nil {
 			h.Close()
+			l.noteDeviceError(dev, "filter rejected", err)
 			continue
 		}
 		l.mu.Lock()
 		l.handles[dev.Name] = h
+		delete(l.reported, dev.Name)
 		l.mu.Unlock()
 		opened++
 		go l.readLoop(dev.Name, h, dev.Description, stop)
 	}
 	return opened, nil
+}
+
+// noteDeviceError logs a device open/filter failure once per distinct error
+// (the watchdog rescans every 20s — without the guard this would spam the log).
+func (l *Listener) noteDeviceError(dev pcap.Interface, what string, err error) {
+	name := dev.Description
+	if name == "" {
+		name = dev.Name
+	}
+	msg := "Capture: " + what + " on \"" + name + "\": " + err.Error()
+	l.mu.Lock()
+	seen := l.reported[dev.Name] == msg
+	if !seen {
+		l.reported[dev.Name] = msg
+	}
+	l.mu.Unlock()
+	if !seen {
+		l.logf(msg)
+	}
 }
 
 // watchdog periodically rescans so adapters that appear after startup (late
