@@ -61,10 +61,11 @@ type Config struct {
 	// Login-gated.
 	UploadAwakened bool `json:"uploadAwakened"`
 
-	// PrivateUploads marks every upload as private (X-Private: 1) so the backend
-	// holds it back from public surfaces. Note the backend releases held data on a
-	// delay — this is an embargo, not permanent secrecy; the UI must say so.
-	// Forces UploadToAODP off (a third party would publish immediately).
+	// PrivateUploads marks contributed MARKET data private (X-Private: 1) so the
+	// backend holds it out of the public price data and releases it on a delay —
+	// an embargo, not permanent secrecy; the UI must say so. Gameplay data is
+	// never public, so it carries no flag. Suspends (but does not clear)
+	// UploadToAODP: a third party would publish immediately.
 	PrivateUploads bool `json:"privateUploads"`
 	// UploadToAODP additionally contributes MARKET data (orders/history/gold, never
 	// personal or gameplay data) to the Albion Online Data Project, anonymously.

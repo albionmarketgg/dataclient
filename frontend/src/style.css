@@ -184,8 +184,9 @@ tbody tr:hover { background: var(--bg-3); }
 }
 .datatoggle:hover { border-color: var(--pill-border); }
 .datatoggle input { margin-top: 2px; }
-.datatoggle.disabled { opacity: .55; cursor: not-allowed; }
-.datatoggle.disabled:hover { border-color: var(--border-soft); }
+/* setting still editable, but currently suspended by another setting */
+.datatoggle.paused { opacity: .55; }
+.datatoggle.paused .dt-name::after { content: " · paused"; color: var(--warn); font-weight: 500; }
 .dt-name { font-weight: 600; font-size: 13px; }
 .dt-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 @media (max-width: 900px) { .settings-grid, .datatoggles { grid-template-columns: 1fr; } }

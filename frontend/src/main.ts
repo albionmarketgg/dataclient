@@ -660,7 +660,7 @@ function readSettingsForm(): Config | null {
     uploadSpecs: chk("uploadSpecs"),
     uploadAwakened: chk("uploadAwakened"),
     privateUploads: chk("privateUploads"),
-    uploadToAodp: chk("uploadToAodp") && !chk("privateUploads"),
+    uploadToAodp: chk("uploadToAodp"),
   };
 }
 
@@ -720,8 +720,8 @@ function refreshActions() {
 }
 
 // setPrivateUploads persists the private-uploads switch from anywhere in the UI.
-// Turning it ON also drops the AODP opt-in (a public dataset would publish
-// immediately, defeating the hold-back).
+// It does not touch the AODP preference: while private is on the engine simply
+// stops sending there, and sharing resumes when private goes off again.
 async function setPrivateUploads(on: boolean) {
   if (!config) return;
   // On the settings panel the switch is right there and the form may hold
@@ -735,7 +735,7 @@ async function setPrivateUploads(on: boolean) {
       return;
     }
   }
-  const next: Config = { ...config, privateUploads: on, uploadToAodp: on ? false : config.uploadToAodp };
+  const next: Config = { ...config, privateUploads: on };
   await App()?.SaveConfig(next);
   config = next;
   renderContent();
@@ -745,7 +745,7 @@ function captureButtons(actions: HTMLElement) {
   // Private uploads stay visible on every panel so they can't be left on
   // unnoticed — clicking the badge turns them off.
   if (config?.privateUploads) {
-    const badge = el(`<button class="privbadge" title="Your uploads are held back from public stats. Contributed market prices are still published later. Click to turn off.">
+    const badge = el(`<button class="privbadge" title="The market prices you contribute are held back and published a couple of hours later. Click to turn off.">
       <span class="dot warn"></span> Private uploads <span class="off">· turn off</span></button>`);
     badge.addEventListener("click", () => setPrivateUploads(false));
     actions.appendChild(badge);
@@ -873,19 +873,22 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
               <input type="checkbox" id="privateUploads" ${c.privateUploads ? "checked" : ""}/>
               <div>
                 <div class="dt-name">Private uploads</div>
-                <div class="dt-desc">Holds your uploads back from public stats and leaderboards.
-                  Market prices you contribute are still <b>published later</b> — released
-                  automatically after a couple of hours — so this delays publication rather than
-                  withholding it. Also disables sharing with the Albion Online Data Project.</div>
+                <div class="dt-desc">Delays the <b>market prices</b> you contribute: they're held
+                  back from the public price data and released automatically a couple of hours
+                  later. Your own gameplay data is private either way — only you ever see it.
+                  While this is on, sharing with the Albion Online Data Project is paused.</div>
               </div>
             </label>
-            <label class="datatoggle ${c.privateUploads ? "disabled" : ""}" for="uploadToAodp">
-              <input type="checkbox" id="uploadToAodp" ${c.uploadToAodp ? "checked" : ""} ${c.privateUploads ? "disabled" : ""}/>
+            <label class="datatoggle ${c.privateUploads ? "paused" : ""}" id="aodpCard" for="uploadToAodp">
+              <input type="checkbox" id="uploadToAodp" ${c.uploadToAodp ? "checked" : ""}/>
               <div>
                 <div class="dt-name">Share with the Albion Online Data Project</div>
                 <div class="dt-desc">Optional. Sends <b>market prices only</b> (orders, price
                   history, gold) to the public AODP dataset — anonymously, with no account details,
-                  and never any of your gameplay data.${c.privateUploads ? " <b>Unavailable while private uploads are on.</b>" : ""}</div>
+                  and never any of your gameplay data.
+                  <b id="aodpPaused" ${c.privateUploads ? "" : `style="display:none"`}>Paused while
+                  private uploads are on — your choice is remembered and resumes when you turn
+                  private off.</b></div>
               </div>
             </label>
           </div>
@@ -932,10 +935,13 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
   // live interlock: private uploads immediately disable the AODP opt-in
   const priv = content.querySelector("#privateUploads") as HTMLInputElement;
   const aodp = content.querySelector("#uploadToAodp") as HTMLInputElement;
+  // Private uploads only *suspend* AODP sharing (enforced at upload time); the
+  // user's choice is kept, so the switch stays usable and just reads as paused.
   priv.addEventListener("change", () => {
-    aodp.disabled = priv.checked;
-    if (priv.checked) aodp.checked = false;
-    aodp.closest(".datatoggle")?.classList.toggle("disabled", priv.checked);
+    content.querySelector("#aodpCard")?.classList.toggle("paused", priv.checked);
+    const note = content.querySelector<HTMLElement>("#aodpPaused");
+    if (note) note.style.display = priv.checked ? "" : "none";
+    void aodp;
   });
 
   content.querySelector("#acctLogin")?.addEventListener("click", startLogin);
@@ -960,8 +966,9 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
       uploadSpecs: chk("uploadSpecs"),
       uploadAwakened: chk("uploadAwakened"),
       privateUploads: chk("privateUploads"),
-      // private wins: never contribute to a public third-party dataset
-      uploadToAodp: chk("uploadToAodp") && !chk("privateUploads"),
+      // kept as the user set it — private uploads suspend the actual sending,
+      // they don't erase the preference
+      uploadToAodp: chk("uploadToAodp"),
     };
     const err = await App()?.SaveConfig(next);
     const msg = content.querySelector("#saveMsg")!;

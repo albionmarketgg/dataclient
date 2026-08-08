@@ -145,8 +145,6 @@ func (a *App) initUserSync() {
 	// stamp uploads with the running client version (for the backend's version gate).
 	a.usersync.SetClientVersion(version)
 	a.sessions.SetClientVersion(version)
-	a.usersync.SetPrivate(a.cfg.PrivateUploads)
-	a.sessions.SetPrivate(a.cfg.PrivateUploads)
 	// the awakened sync response echoes backend-computed trait values — apply them
 	// onto the tracked items so the UI paints real numbers over its skeletons.
 	a.usersync.SetOnAwakened(func(items []usersync.ResolvedAwakened) {
