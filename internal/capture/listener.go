@@ -15,6 +15,12 @@ import (
 	"github.com/albionmarketgg/dataclient/internal/state"
 )
 
+// rescanInterval is how often the watchdog re-enumerates capture devices while
+// running. Adapters routinely appear AFTER capture starts (autostart racing
+// Wi-Fi/DHCP at boot, docking, VPN up/down); without rescanning, a client
+// started before the network is up captures nothing until manually restarted.
+const rescanInterval = 20 * time.Second
+
 // Listener captures packets across all devices and dispatches Photon payloads.
 type Listener struct {
 	cfg    config.Config
@@ -23,7 +29,7 @@ type Listener struct {
 	logf   func(string)
 
 	mu       sync.Mutex
-	handles  []*pcap.Handle
+	handles  map[string]*pcap.Handle // keyed by pcap device name
 	running  bool
 	stopOnce chan struct{}
 
@@ -63,7 +69,9 @@ func (l *Listener) Running() bool {
 	return l.running
 }
 
-// Start opens all devices and begins capturing. Non-blocking.
+// Start opens all devices, begins capturing, and keeps a watchdog rescanning
+// for devices that appear later (e.g. the client autostarted before the network
+// was up). Non-blocking; only a missing pcap runtime is a hard error.
 func (l *Listener) Start() error {
 	l.mu.Lock()
 	if l.running {
@@ -72,6 +80,7 @@ func (l *Listener) Start() error {
 	}
 	l.running = true
 	l.narrowed = false
+	l.handles = map[string]*pcap.Handle{}
 	l.stopOnce = make(chan struct{})
 	stop := l.stopOnce
 	l.mu.Unlock()
@@ -80,18 +89,42 @@ func (l *Listener) Start() error {
 		time.Sleep(time.Duration(d) * time.Second)
 	}
 
-	devs, err := pcap.FindAllDevs()
+	opened, err := l.scan(stop)
 	if err != nil {
 		l.setStopped()
 		return err
 	}
 
+	if opened == 0 {
+		l.logf("No capture devices available yet - will keep retrying (is the network up and a capture driver installed?).")
+	} else {
+		l.logf("Listening for Albion market traffic on " + itoa(opened) + " device(s).")
+		l.st.SetListening(true)
+	}
+	go l.watchdog(stop)
+	return nil
+}
+
+// scan opens every eligible capture device that isn't open yet. Returns how
+// many new devices were opened; the only error is device enumeration failing
+// outright (missing pcap runtime).
+func (l *Listener) scan(stop chan struct{}) (int, error) {
+	devs, err := pcap.FindAllDevs()
+	if err != nil {
+		return 0, err
+	}
 	opened := 0
 	for _, dev := range devs {
 		if want := strings.TrimSpace(l.cfg.CaptureDevice); want != "" {
 			if !strings.Contains(dev.Description, want) && !strings.Contains(dev.Name, want) {
 				continue
 			}
+		}
+		l.mu.Lock()
+		_, already := l.handles[dev.Name]
+		l.mu.Unlock()
+		if already {
+			continue
 		}
 		h, err := pcap.OpenLive(dev.Name, 65536, false, pcap.BlockForever)
 		if err != nil {
@@ -102,23 +135,42 @@ func (l *Listener) Start() error {
 			continue
 		}
 		l.mu.Lock()
-		l.handles = append(l.handles, h)
+		l.handles[dev.Name] = h
 		l.mu.Unlock()
 		opened++
-		go l.readLoop(h, dev.Description, stop)
+		go l.readLoop(dev.Name, h, dev.Description, stop)
 	}
-
-	if opened == 0 {
-		l.setStopped()
-		l.logf("No capture devices could be opened (is Npcap installed?).")
-		return nil
-	}
-	l.logf("Listening for Albion market traffic on " + itoa(opened) + " device(s).")
-	l.st.SetListening(true)
-	return nil
+	return opened, nil
 }
 
-func (l *Listener) readLoop(h *pcap.Handle, desc string, stop chan struct{}) {
+// watchdog periodically rescans so adapters that appear after startup (late
+// Wi-Fi/DHCP at boot, docking, VPN) get captured without an app restart.
+func (l *Listener) watchdog(stop chan struct{}) {
+	t := time.NewTicker(rescanInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			l.mu.Lock()
+			had := len(l.handles)
+			l.mu.Unlock()
+			opened, err := l.scan(stop)
+			if err != nil || opened == 0 {
+				continue
+			}
+			if had == 0 {
+				l.logf("Capture device available - listening for Albion market traffic on " + itoa(opened) + " device(s).")
+				l.st.SetListening(true)
+			} else {
+				l.logf("Capture attached to " + itoa(opened) + " new device(s).")
+			}
+		}
+	}
+}
+
+func (l *Listener) readLoop(name string, h *pcap.Handle, desc string, stop chan struct{}) {
 	src := gopacket.NewPacketSource(h, h.LinkType())
 	src.NoCopy = true
 	in := src.Packets()
@@ -128,6 +180,14 @@ func (l *Listener) readLoop(h *pcap.Handle, desc string, stop chan struct{}) {
 			return
 		case pkt, ok := <-in:
 			if !ok {
+				// The device died (disabled/unplugged/driver reset). Forget it so
+				// the watchdog can reattach if it comes back.
+				l.mu.Lock()
+				if l.handles != nil && l.handles[name] == h {
+					delete(l.handles, name)
+				}
+				l.mu.Unlock()
+				h.Close()
 				return
 			}
 			l.handlePacket(pkt, desc)
