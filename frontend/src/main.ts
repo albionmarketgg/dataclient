@@ -176,7 +176,7 @@ function buildShell(): HTMLElement {
   ];
   for (const [id, label] of items) {
     const b = el(`<button data-route="${id}">${navIcon(id)}${label}</button>`);
-    b.addEventListener("click", () => { route = id; render(); });
+    b.addEventListener("click", () => navigate(id));
     nav.appendChild(b);
   }
   shell.querySelector("#trayBtn")!.addEventListener("click", () => { App()?.HideToTray(); });
@@ -298,19 +298,38 @@ async function renderVerify(content: HTMLElement, _actions: HTMLElement) {
         `<tr><td class="mono">${escapeHtml(c.name)}</td><td class="dim">${c.serverName || "—"}</td><td class="mono">${silver(c.fame)} fame</td>
          <td style="text-align:right"><button class="btn sm vbtn" data-name="${escapeHtml(c.name)}" data-srv="${c.serverId}" data-fame="${c.fame}" style="width:auto;padding:0 12px">Verify</button></td></tr>`
       ).join("")
-    : `<tr><td colspan="4" class="dim">No character detected yet — log into Albion Online (or travel between zones) and your character appears here.</td></tr>`;
+    : `<tr><td colspan="4"><div class="empty">No character detected yet — log into Albion Online (or travel between zones) and your character appears here.</div></td></tr>`;
 
   content.innerHTML = `
-    <div class="panel" style="max-width:680px">
-      <h3>Verify a character</h3>
-      <div class="panel-body">
-        <div class="dim" style="font-size:12px;margin-bottom:12px">
-          We detect your in-game character straight from the game's login packet — proving you actually
-          play it. Click <b>Verify</b> to send it to your Albion Market account; the result shows below.
+    <div class="grid cards single" style="margin-bottom:16px">
+      <div class="card"><div class="label">Detected characters</div><div class="value accent">${chars.length}</div></div>
+      <div class="card"><div class="label">Signed in as</div><div class="value">${escapeHtml(user.username || "—")}</div></div>
+    </div>
+    <div class="grid settings-grid">
+      <div class="panel settings-wide">
+        <h3>Detected characters</h3>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table><thead><tr><th>Character</th><th>Server</th><th>Fame</th><th></th></tr></thead>
+              <tbody>${charsHTML}</tbody></table>
+          </div>
+          <div id="vmsg" class="${verifyMsgCls}" style="font-size:13px;margin-top:14px">${escapeHtml(verifyMsg)}</div>
         </div>
-        <table><thead><tr><th>Detected character</th><th>Server</th><th>Fame</th><th></th></tr></thead>
-          <tbody>${charsHTML}</tbody></table>
-        <div id="vmsg" class="${verifyMsgCls}" style="font-size:13px;margin-top:14px">${escapeHtml(verifyMsg)}</div>
+      </div>
+
+      <div class="panel settings-wide">
+        <h3>How verification works</h3>
+        <div class="panel-body">
+          <div class="dim" style="font-size:12px;line-height:1.6">
+            Your character is read straight from the game's own login packet, which proves you
+            actually play it — there's nothing to type in and nothing to copy from the website.
+            Press <b>Verify</b> next to a character to link it to your Albion Market account;
+            the result appears above the panel divider.
+            <br><br>
+            Nothing is sent until you press Verify. Only the character name, its server and its
+            fame total are submitted.
+          </div>
+        </div>
       </div>
     </div>`;
 
@@ -614,6 +633,83 @@ async function renderMails(content: HTMLElement, _actions: HTMLElement) {
   }</tbody></table>`;
 }
 
+// ---- settings: unsaved-changes guard ----
+
+// readSettingsForm builds the Config the settings form currently describes, or
+// null when the form isn't on screen. Spreading `config` keeps key order stable
+// so the dirty check can compare serialized forms.
+function readSettingsForm(): Config | null {
+  const content = document.getElementById("content");
+  if (!config || !content || route !== "settings") return null;
+  const box = content.querySelector<HTMLInputElement>("#startInTray");
+  const dev = content.querySelector<HTMLSelectElement>("#captureDevice");
+  if (!box || !dev) return null; // settings markup not rendered (yet)
+  const chk = (id: string) => !!content.querySelector<HTMLInputElement>("#" + id)?.checked;
+  return {
+    ...config,
+    startInTray: chk("startInTray"),
+    closeToTray: chk("closeToTray"),
+    startWithWindows: chk("startWithWindows"),
+    captureDevice: dev.value,
+    uploadTrades: chk("uploadTrades"),
+    uploadMails: chk("uploadMails"),
+    uploadGathering: chk("uploadGathering"),
+    uploadCombat: chk("uploadCombat"),
+    uploadLoot: chk("uploadLoot"),
+    uploadParty: chk("uploadParty"),
+    uploadSpecs: chk("uploadSpecs"),
+    uploadAwakened: chk("uploadAwakened"),
+    privateUploads: chk("privateUploads"),
+    uploadToAodp: chk("uploadToAodp") && !chk("privateUploads"),
+  };
+}
+
+function pendingSettings(): Config | null {
+  const next = readSettingsForm();
+  if (!next || !config) return null;
+  return JSON.stringify(next) === JSON.stringify(config) ? null : next;
+}
+
+// navigate switches panels, first warning if the settings form has edits that
+// were never saved.
+function navigate(to: string) {
+  if (to === route) return;
+  const pending = route === "settings" ? pendingSettings() : null;
+  if (!pending) { route = to; render(); return; }
+  confirmUnsaved(pending, to);
+}
+
+// confirmUnsaved offers to save the pending settings or discard them before
+// leaving the panel. Dismissing (Escape / backdrop) stays on Settings.
+function confirmUnsaved(pending: Config, to: string) {
+  const host = document.createElement("div");
+  host.className = "modal-overlay";
+  host.innerHTML = `
+    <div class="modal">
+      <h3>You haven't saved your settings</h3>
+      <p>You changed settings on this page but didn't save them.</p>
+      <div class="row" style="gap:8px;margin-top:16px;justify-content:flex-end">
+        <button class="btn ghost sm" id="unsavedDiscard" style="width:auto;padding:0 14px">Don't save</button>
+        <button class="btn sm" id="unsavedSave" style="width:auto;padding:0 14px">Save and continue</button>
+      </div>
+    </div>`;
+  const close = () => { host.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  host.addEventListener("click", (e) => { if (e.target === host) close(); });
+  host.querySelector("#unsavedDiscard")!.addEventListener("click", () => {
+    close(); route = to; render();
+  });
+  host.querySelector("#unsavedSave")!.addEventListener("click", async () => {
+    close();
+    await App()?.SaveConfig(pending);
+    config = pending;
+    route = to;
+    render();
+  });
+  document.body.appendChild(host);
+}
+
 // refreshActions redraws just the top-bar controls (capture toggle + private
 // badge), leaving the panel below untouched.
 function refreshActions() {
@@ -628,6 +724,17 @@ function refreshActions() {
 // immediately, defeating the hold-back).
 async function setPrivateUploads(on: boolean) {
   if (!config) return;
+  // On the settings panel the switch is right there and the form may hold
+  // unsaved edits — flip the checkbox instead of saving over them.
+  if (route === "settings") {
+    const box = document.querySelector<HTMLInputElement>("#privateUploads");
+    if (box) {
+      box.checked = on;
+      box.dispatchEvent(new Event("change")); // keeps the AODP interlock in sync
+      box.scrollIntoView({ block: "center" });
+      return;
+    }
+  }
   const next: Config = { ...config, privateUploads: on, uploadToAodp: on ? false : config.uploadToAodp };
   await App()?.SaveConfig(next);
   config = next;
@@ -761,24 +868,26 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
       <div class="panel settings-wide">
         <h3>Privacy &amp; sharing</h3>
         <div class="panel-body">
-          <div class="field switch">
-            <input type="checkbox" id="privateUploads" ${c.privateUploads ? "checked" : ""}/>
-            <label for="privateUploads">Private uploads</label>
-          </div>
-          <div class="dim" style="font-size:12px;margin:-6px 0 14px 0">
-            Your uploads are held back from public stats and leaderboards. Market prices you
-            contribute are still <b>published later</b> (released automatically after a couple of
-            hours), so this delays their publication rather than withholding them permanently.
-            Turning this on disables sharing with the Albion Online Data Project.
-          </div>
-          <div class="field switch">
-            <input type="checkbox" id="uploadToAodp" ${c.uploadToAodp ? "checked" : ""} ${c.privateUploads ? "disabled" : ""}/>
-            <label for="uploadToAodp">Also contribute market data to the Albion Online Data Project</label>
-          </div>
-          <div class="dim" style="font-size:12px;margin-top:-6px">
-            Optional. Sends <b>market prices only</b> (orders, price history, gold) to the public
-            AODP dataset — anonymously, with no account details, and never any of your gameplay
-            data. ${c.privateUploads ? "<b>Unavailable while private uploads are on.</b>" : ""}
+          <div class="datatoggles">
+            <label class="datatoggle" for="privateUploads">
+              <input type="checkbox" id="privateUploads" ${c.privateUploads ? "checked" : ""}/>
+              <div>
+                <div class="dt-name">Private uploads</div>
+                <div class="dt-desc">Holds your uploads back from public stats and leaderboards.
+                  Market prices you contribute are still <b>published later</b> — released
+                  automatically after a couple of hours — so this delays publication rather than
+                  withholding it. Also disables sharing with the Albion Online Data Project.</div>
+              </div>
+            </label>
+            <label class="datatoggle ${c.privateUploads ? "disabled" : ""}" for="uploadToAodp">
+              <input type="checkbox" id="uploadToAodp" ${c.uploadToAodp ? "checked" : ""} ${c.privateUploads ? "disabled" : ""}/>
+              <div>
+                <div class="dt-name">Share with the Albion Online Data Project</div>
+                <div class="dt-desc">Optional. Sends <b>market prices only</b> (orders, price
+                  history, gold) to the public AODP dataset — anonymously, with no account details,
+                  and never any of your gameplay data.${c.privateUploads ? " <b>Unavailable while private uploads are on.</b>" : ""}</div>
+              </div>
+            </label>
           </div>
         </div>
       </div>
@@ -826,6 +935,7 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
   priv.addEventListener("change", () => {
     aodp.disabled = priv.checked;
     if (priv.checked) aodp.checked = false;
+    aodp.closest(".datatoggle")?.classList.toggle("disabled", priv.checked);
   });
 
   content.querySelector("#acctLogin")?.addEventListener("click", startLogin);
@@ -979,9 +1089,11 @@ async function init() {
       const listeningChanged = s.listening !== snapshot.listening;
       snapshot = s;
       renderSidebarStatus();
-      // the capture toggle now lives in the top bar of EVERY panel — refresh it
-      // when the listening state flips (or live-refresh the dashboard as before)
-      if (route === "dashboard" || listeningChanged) renderContent();
+      // The capture toggle lives in the top bar of EVERY panel, so refresh it
+      // when the listening state flips. Never re-render the settings panel from
+      // here — that would silently discard the user's unsaved edits.
+      if (route === "settings") { if (listeningChanged) refreshActions(); }
+      else if (route === "dashboard" || listeningChanged) renderContent();
     });
     r.EventsOn("stats", (s: Stats) => { stats = s; if (route === "dashboard") renderContent(); });
     r.EventsOn("userstats", (s: UserStats) => { userStats = s; if (route === "dashboard") renderContent(); });

@@ -184,6 +184,8 @@ tbody tr:hover { background: var(--bg-3); }
 }
 .datatoggle:hover { border-color: var(--pill-border); }
 .datatoggle input { margin-top: 2px; }
+.datatoggle.disabled { opacity: .55; cursor: not-allowed; }
+.datatoggle.disabled:hover { border-color: var(--border-soft); }
 .dt-name { font-weight: 600; font-size: 13px; }
 .dt-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 @media (max-width: 900px) { .settings-grid, .datatoggles { grid-template-columns: 1fr; } }
@@ -215,11 +217,22 @@ tbody tr:hover { background: var(--bg-3); }
 .row { display: flex; gap: 10px; align-items: center; }
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
 .field label { font-size: 12px; color: var(--text-med); }
-.field input[type=text], .field input[type=number] {
+.field input[type=text], .field input[type=number], .field select {
   height: 34px; background: var(--bg-3); border: 1px solid var(--border);
   border-radius: var(--r-sm); color: var(--text); padding: 0 10px; font: inherit;
 }
-.field input:focus { outline: none; border-color: var(--accent); }
+.field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+/* native select: drop the OS chrome and draw our own caret */
+.field select {
+  appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 30px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+                    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.field select:hover { border-color: var(--pill-border); }
+.field select option { background: var(--bg-2); color: var(--text); }
 .switch { display: flex; align-items: center; gap: 8px; }
 .section-title { font-family: var(--font-head); font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; margin: 4px 0 12px; }
 .empty { padding: 40px; text-align: center; color: var(--text-dim); }
