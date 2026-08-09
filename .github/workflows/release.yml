@@ -36,6 +36,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need the annotated tag object for the release title
 
       - name: Resolve version
         id: ver
@@ -48,6 +50,11 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # Release title = the annotated tag's subject line, so the tag message
+          # decides how the release reads. Falls back to a generic name.
+          TITLE="$(git for-each-ref --format='%(contents:subject)' "refs/tags/$TAG" 2>/dev/null || true)"
+          [ -n "$TITLE" ] || TITLE="Albion Market Data Client $TAG"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v5
         with:
@@ -147,7 +154,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: Albion Market Data Client ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.title }}
           draft: false
           prerelease: false
           files: |
