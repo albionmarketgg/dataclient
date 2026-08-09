@@ -51,8 +51,14 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           # Release title = the annotated tag's subject line, so the tag message
-          # decides how the release reads. Falls back to a generic name.
-          TITLE="$(git for-each-ref --format='%(contents:subject)' "refs/tags/$TAG" 2>/dev/null || true)"
+          # decides how the release reads. checkout materializes the tag as a
+          # lightweight ref (which would yield the COMMIT subject), so re-fetch
+          # the real tag object first and only read it if it is one.
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" || true
+          TITLE=""
+          if [ "$(git cat-file -t "$TAG" 2>/dev/null)" = "tag" ]; then
+            TITLE="$(git tag -l --format='%(contents:subject)' "$TAG")"
+          fi
           [ -n "$TITLE" ] || TITLE="Albion Market Data Client $TAG"
           echo "title=$TITLE" >> "$GITHUB_OUTPUT"
 
