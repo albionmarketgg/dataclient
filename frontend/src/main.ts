@@ -756,7 +756,8 @@ async function setPrivateUploads(on: boolean) {
 function captureButtons(actions: HTMLElement) {
   // Private uploads stay visible on every panel so they can't be left on
   // unnoticed — clicking the badge turns them off.
-  if (config?.privateUploads) {
+  // only while it's actually in effect — the flag needs an account behind it
+  if (config?.privateUploads && user.id) {
     const badge = el(`<button class="privbadge" title="The market prices you contribute are held back and published a couple of hours later. Click to turn off.">
       <span class="dot warn"></span> Private uploads <span class="off">· turn off</span></button>`);
     badge.addEventListener("click", () => setPrivateUploads(false));
@@ -881,7 +882,7 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
         <h3>Privacy &amp; sharing</h3>
         <div class="panel-body">
           <div class="datatoggles">
-            <label class="datatoggle" for="privateUploads">
+            <label class="datatoggle ${c.privateUploads && !user.id ? "paused" : ""}" for="privateUploads">
               <input type="checkbox" id="privateUploads" ${c.privateUploads ? "checked" : ""}/>
               <div>
                 <div class="dt-name">Private uploads</div>
@@ -889,7 +890,8 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
                   back from the public price data and released automatically ${holdPeriodText()}.
                   You still see your own prices in your tools the whole time, and your gameplay
                   data is private either way — only you ever see it.
-                  While this is on, sharing with the Albion Online Data Project is paused.</div>
+                  While this is on, sharing with the Albion Online Data Project is paused.
+                  ${c.privateUploads && !user.id ? "<b>Needs you signed in — held prices are kept per account, so this does nothing while signed out.</b>" : ""}</div>
               </div>
             </label>
             <label class="datatoggle ${c.privateUploads ? "paused" : ""}" id="aodpCard" for="uploadToAodp">

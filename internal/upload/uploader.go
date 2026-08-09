@@ -302,15 +302,22 @@ func (u *Uploader) post(ctx context.Context, url, contentType string, body []byt
 	req.Header.Set("User-Agent", "AlbionMarketDataClient")
 	// An anonymous uploader (third-party endpoint) carries no account identity.
 	if u.baseFn == nil {
+		loggedIn := false
 		if u.tokenFn != nil {
 			if token, userID, ok := u.tokenFn(); ok {
+				loggedIn = true
 				req.Header.Set("Authorization", "Bearer "+token)
 				if userID != "" {
 					req.Header.Set("X-User-Id", userID)
 				}
 			}
 		}
-		if u.privateFn != nil && u.privateFn() {
+		// Private uploads only mean something for an account: the backend keys
+		// held prices by owner so the uploader can still see their own, and our
+		// anonymous identifier is regenerated per upload — logged out there is
+		// no stable owner, so holding data back would cost the price book
+		// without giving the user anything.
+		if loggedIn && u.privateFn != nil && u.privateFn() {
 			req.Header.Set("X-Private", "1")
 		}
 	}

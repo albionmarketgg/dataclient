@@ -67,14 +67,16 @@ func testCfg(base string) config.Config {
 	return cfg
 }
 
-// X-Private is sent only while the private switch is on.
+// X-Private is sent only while the private switch is on AND the user is signed
+// in (held prices are keyed per owner; logged out there is no stable owner).
 func TestPrivateHeader(t *testing.T) {
 	srv, got := recorder(t)
 	defer srv.Close()
 
-	private := false
+	private, loggedIn := false, true
 	u := New(testCfg(srv.URL), nil)
 	u.SetPrivateProvider(func() bool { return private })
+	u.SetTokenProvider(func() (string, string, bool) { return "jwt", "user-1", loggedIn })
 	u.Start()
 	defer u.Stop()
 
@@ -84,9 +86,15 @@ func TestPrivateHeader(t *testing.T) {
 	}
 	private = true
 	u.EnqueueGold(market.GoldPriceUpload{Prices: []uint32{2}, Timestamps: []int64{2}})
-	r := waitFor(t, got, 2)
-	if len(r) != 2 || r[1].private != "1" {
+	if r := waitFor(t, got, 2); len(r) != 2 || r[1].private != "1" {
 		t.Fatalf("private upload not flagged: %+v", r)
+	}
+	// signed out: the switch is still on, but the flag is meaningless
+	loggedIn = false
+	u.EnqueueGold(market.GoldPriceUpload{Prices: []uint32{3}, Timestamps: []int64{3}})
+	r := waitFor(t, got, 3)
+	if len(r) != 3 || r[2].private != "" {
+		t.Fatalf("private flagged while signed out: %+v", r)
 	}
 }
 
