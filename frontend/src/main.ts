@@ -30,6 +30,7 @@ type Config = {
   uploadCombat: boolean; uploadLoot: boolean; uploadParty: boolean;
   uploadSpecs: boolean; uploadAwakened: boolean;
   privateUploads: boolean; uploadToAodp: boolean;
+
   itemsUrl: string; captureDevice: string;
   marketOrdersTopic: string; marketHistoriesTopic: string; goldPricesTopic: string;
   networkStartDelaySecs: number; idleMinutes: number; idleCheckMinutes: number;
@@ -76,6 +77,8 @@ const SUGGEST: Record<string, { win: number; n: number }> = {
 let route = "dashboard";
 let updateInfo: any = null;     // latest version-check result being shown
 let updateDismissed = "";       // soft update the user clicked "Later" on
+// backend-reported hold period for private market uploads (null until fetched)
+let privacyInfo: { holdMinutes: number } | null = null;
 
 // iconUrl resolves an awakened item's icon via our icon endpoint (delegates to the
 // cached render service server-side). 50px is a natively-supported size.
@@ -710,6 +713,15 @@ function confirmUnsaved(pending: Config, to: string) {
   document.body.appendChild(host);
 }
 
+// holdPeriodText renders the backend's live hold period ("after 2 hours"),
+// falling back to the generic wording before we've heard from it.
+function holdPeriodText(): string {
+  const m = privacyInfo?.holdMinutes || 0;
+  if (!m) return "a couple of hours later";
+  if (m % 60 === 0) { const h = m / 60; return `${h} hour${h === 1 ? "" : "s"} later`; }
+  return `${m} minutes later`;
+}
+
 // refreshActions redraws just the top-bar controls (capture toggle + private
 // badge), leaving the panel below untouched.
 function refreshActions() {
@@ -874,8 +886,9 @@ function renderSettings(content: HTMLElement, _actions: HTMLElement) {
               <div>
                 <div class="dt-name">Private uploads</div>
                 <div class="dt-desc">Delays the <b>market prices</b> you contribute: they're held
-                  back from the public price data and released automatically a couple of hours
-                  later. Your own gameplay data is private either way — only you ever see it.
+                  back from the public price data and released automatically ${holdPeriodText()}.
+                  You still see your own prices in your tools the whole time, and your gameplay
+                  data is private either way — only you ever see it.
                   While this is on, sharing with the Albion Online Data Project is paused.</div>
               </div>
             </label>
@@ -1114,6 +1127,13 @@ async function init() {
     r.EventsOn("authPending", (p: any) => { authPending = { userCode: p.userCode, url: p.url }; if (authWaiting) renderAuthCard(); });
     r.EventsOn("authError", (msg: string) => { authWaiting = false; authPending = null; authError = msg || "Login failed"; renderAuthCard(); });
     r.EventsOn("update", (u: any) => showUpdate(u));
+    // the account-level private flag can differ from ours at login; the backend
+    // value wins so the UI never claims privacy the server isn't applying.
+    r.EventsOn("config", async (c: Config) => {
+      config = c;
+      privacyInfo = (await App()?.GetPrivacyInfo()) || privacyInfo;
+      renderContent();
+    });
     r.EventsOn("npcapMissing", () => { npcapShown = true; renderNpcapModal(); });
   }
   // 1s tick: refresh session state, drive the session-suggestion toasts, and
@@ -1128,6 +1148,7 @@ async function init() {
       feed = (await a.GetFeed()) || [];
       logs = (await a.GetLogs()) || [];
       config = await a.GetConfig();
+      privacyInfo = (await a.GetPrivacyInfo()) || null;
       devices = (await a.GetDevices()) || [];
       authEnabled = (await a.AuthEnabled()) || false;
       user = (await a.GetUser()) || user;

@@ -39,6 +39,9 @@ type App struct {
 	updateMu   sync.Mutex
 	lastUpdate update.Result
 
+	privacyMu   sync.Mutex
+	holdMinutes int // backend-reported hold period for private market uploads
+
 	lastServerID int // tracks region changes to re-home active sessions
 }
 
@@ -86,7 +89,10 @@ func (a *App) startup(ctx context.Context) {
 	})
 	a.eng.Log("Albion Market Data Client started.")
 	a.applyAutostart()
-	go a.auth.Restore(ctx)
+	go func() {
+		a.auth.Restore(ctx) // silent login from the stored refresh token
+		a.syncPrivacy()
+	}()
 	go a.startTray()
 	if a.cfg.StartInTray {
 		runtime.WindowHide(ctx)
@@ -243,6 +249,7 @@ func (a *App) GetConfig() config.Config { return a.cfg }
 
 // SaveConfig persists a new configuration (takes effect on restart for capture).
 func (a *App) SaveConfig(cfg config.Config) string {
+	prevPrivate := a.cfg.PrivateUploads
 	a.cfg = cfg
 	if err := cfg.Save(a.cfgPath); err != nil {
 		return err.Error()
@@ -250,8 +257,47 @@ func (a *App) SaveConfig(cfg config.Config) string {
 	a.applyAutostart()
 	// privacy + AODP contribution must take effect at once, not after a restart
 	a.eng.ApplyConfig(cfg)
+	if prevPrivate != cfg.PrivateUploads {
+		// mirror to the account so the backend still holds our prices if the
+		// per-upload header is ever stripped in transit
+		go a.usersync.PutPrivateSettings(context.Background(), cfg.PrivateUploads)
+	}
 	a.eng.Log("Configuration saved. Restart to apply capture changes.")
 	return ""
+}
+
+// syncPrivacy converges the local private-uploads switch with the account-level
+// flag (which is shared with the website) and picks up the live hold period.
+// Runs once after login.
+func (a *App) syncPrivacy() {
+	if a.usersync == nil {
+		return
+	}
+	effective, hold := a.usersync.SyncPrivateSettings(a.cfg.PrivateUploads)
+	a.privacyMu.Lock()
+	a.holdMinutes = hold
+	a.privacyMu.Unlock()
+	if effective != a.cfg.PrivateUploads {
+		a.cfg.PrivateUploads = effective
+		_ = a.cfg.Save(a.cfgPath)
+		a.eng.ApplyConfig(a.cfg)
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "config", a.cfg)
+		}
+	}
+}
+
+// PrivacyInfo tells the UI how long contributed prices are held (0 = unknown,
+// render the generic wording).
+type PrivacyInfo struct {
+	HoldMinutes int `json:"holdMinutes"`
+}
+
+// GetPrivacyInfo returns the live hold period reported by the backend.
+func (a *App) GetPrivacyInfo() PrivacyInfo {
+	a.privacyMu.Lock()
+	defer a.privacyMu.Unlock()
+	return PrivacyInfo{HoldMinutes: a.holdMinutes}
 }
 
 // applyAutostart syncs the Windows "start at login" registry entry to the

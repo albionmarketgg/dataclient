@@ -206,6 +206,7 @@ func (a *App) Login() string {
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "auth", a.GetUser())
 		}
+		a.syncPrivacy() // converge the account-level private-uploads flag
 	}()
 	return ""
 }
