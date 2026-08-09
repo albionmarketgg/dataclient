@@ -62,14 +62,17 @@ func (s *Syncer) PutPrivateSettings(ctx context.Context, private bool) bool {
 	return s.postRaw(ctx, jwt, "/user/private-uploads", body)
 }
 
-// SyncPrivateSettings converges the client and the account on login.
+// SyncPrivateSettings converges the client and the account on login and
+// returns the value the client should hold, plus the live hold period in
+// minutes (0 = unknown).
 //
-// The account flag is shared across devices and the website, and effective
-// privacy is (header OR account flag) — so if the account already says private
-// but this client doesn't, the client UI would be lying about what happens.
-// Hence: adopt an account value that's already set, and only push ours when the
-// backend has never been told (null). Returns the value the client should now
-// hold, plus the live hold period in minutes (0 = unknown).
+// Rule: **private wins** — effective = local OR account. It matches the
+// backend's own semantics (it holds prices when either the header or the
+// account flag says so), and it's the only rule that can't silently drop
+// privacy the user asked for. A toggle made while logged out never reaches the
+// account, so "adopt whatever the account says" would quietly undo it; taking
+// the union can only ever err toward holding data back, never toward
+// publishing it. Whichever side is behind gets updated.
 func (s *Syncer) SyncPrivateSettings(local bool) (effective bool, holdMinutes int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -77,9 +80,12 @@ func (s *Syncer) SyncPrivateSettings(local bool) (effective bool, holdMinutes in
 	if !ok {
 		return local, 0
 	}
-	if got.PrivateUploads == nil {
-		s.PutPrivateSettings(ctx, local) // never set -> seed it from this client
-		return local, got.HoldMinutes
+	account := got.PrivateUploads != nil && *got.PrivateUploads
+	effective = local || account
+	// push when the account is unset or behind (never seen it, or it says off
+	// while this client says on)
+	if got.PrivateUploads == nil || account != effective {
+		s.PutPrivateSettings(ctx, effective)
 	}
-	return *got.PrivateUploads, got.HoldMinutes
+	return effective, got.HoldMinutes
 }
